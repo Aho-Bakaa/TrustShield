@@ -1,0 +1,35 @@
+{
+  "description": "Allowlist of official Indian securities-market domains and known entities. Demo registry — not exhaustive. Used by the authenticity layer and entity extractor.",
+  "official_domains": [
+    { "domain": "sebi.gov.in", "entity": "Securities and Exchange Board of India (SEBI)", "type": "regulator", "criticality": 1.0 },
+    { "domain": "scores.sebi.gov.in", "entity": "SEBI SCORES", "type": "regulator", "criticality": 1.0 },
+    { "domain": "nseindia.com", "entity": "National Stock Exchange (NSE)", "type": "exchange", "criticality": 0.95 },
+    { "domain": "bseindia.com", "entity": "BSE Ltd", "type": "exchange", "criticality": 0.95 },
+    { "domain": "cdslindia.com", "entity": "CDSL", "type": "depository", "criticality": 0.9 },
+    { "domain": "nsdl.co.in", "entity": "NSDL", "type": "depository", "criticality": 0.9 },
+    { "domain": "rbi.org.in", "entity": "Reserve Bank of India (RBI)", "type": "regulator", "criticality": 1.0 },
+    { "domain": "amfiindia.com", "entity": "AMFI", "type": "industry_body", "criticality": 0.85 },
+    { "domain": "zerodha.com", "entity": "Zerodha", "type": "broker", "criticality": 0.8 },
+    { "domain": "groww.in", "entity": "Groww", "type": "broker", "criticality": 0.8 },
+    { "domain": "icicidirect.com", "entity": "ICICI Direct", "type": "broker", "criticality": 0.8 },
+    { "domain": "kite.zerodha.com", "entity": "Zerodha Kite", "type": "broker", "criticality": 0.8 },
+    { "domain": "angelone.in", "entity": "Angel One", "type": "broker", "criticality": 0.8 }
+  ],
+  "entities": [
+    { "text": "SEBI", "type": "regulator", "criticality": 1.0, "aliases": ["Securities and Exchange Board of India", "securities exchange board"] },
+    { "text": "RBI", "type": "regulator", "criticality": 1.0, "aliases": ["Reserve Bank of India"] },
+    { "text": "NSE", "type": "exchange", "criticality": 0.95, "aliases": ["National Stock Exchange"] },
+    { "text": "BSE", "type": "exchange", "criticality": 0.95, "aliases": ["Bombay Stock Exchange"] },
+    { "text": "CDSL", "type": "depository", "criticality": 0.9, "aliases": ["Central Depository Services"] },
+    { "text": "NSDL", "type": "depository", "criticality": 0.9, "aliases": ["National Securities Depository"] },
+    { "text": "AMFI", "type": "industry_body", "criticality": 0.85, "aliases": ["Association of Mutual Funds"] },
+    { "text": "Zerodha", "type": "broker", "criticality": 0.8, "aliases": ["Kite"] },
+    { "text": "Groww", "type": "broker", "criticality": 0.8, "aliases": [] },
+    { "text": "Angel One", "type": "broker", "criticality": 0.8, "aliases": ["Angel Broking"] },
+    { "text": "ICICI Direct", "type": "broker", "criticality": 0.8, "aliases": [] },
+    { "text": "Reliance Industries", "type": "company", "criticality": 0.7, "aliases": ["RIL"] },
+    { "text": "Adani", "type": "company", "criticality": 0.7, "aliases": ["Adani Group"] },
+    { "text": "Tata", "type": "company", "criticality": 0.7, "aliases": ["TCS", "Tata Motors"] },
+    { "text": "IPO", "type": "scheme", "criticality": 0.5, "aliases": ["initial public offering"] }
+  ]
+}

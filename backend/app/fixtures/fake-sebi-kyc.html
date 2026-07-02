@@ -1,0 +1,37 @@
+<!doctype html>
+<!-- DEMO FIXTURE: a fake "SEBI KYC" credential-capture page used to exercise
+     TrustShield's Playwright rendering. NOT affiliated with SEBI. -->
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>SEBI Investor KYC Re-Verification Portal</title>
+  <style>
+    body { font-family: Arial, sans-serif; background:#f2f5f9; margin:0; color:#12243b; }
+    .bar { background:#0b3d91; color:#fff; padding:14px 24px; font-weight:bold; font-size:20px; }
+    .card { max-width:420px; margin:40px auto; background:#fff; border:1px solid #dbe3ee; border-radius:10px; padding:26px; box-shadow:0 8px 30px rgba(0,0,0,.08); }
+    h2 { margin-top:0; color:#0b3d91; }
+    .warn { background:#fff4e5; border:1px solid #ffcf99; color:#8a4b00; padding:10px; border-radius:6px; font-size:13px; }
+    label { display:block; margin:14px 0 4px; font-size:13px; }
+    input { width:100%; padding:10px; border:1px solid #cbd5e1; border-radius:6px; box-sizing:border-box; }
+    button { margin-top:18px; width:100%; background:#0b3d91; color:#fff; border:0; padding:12px; border-radius:6px; font-size:15px; cursor:pointer; }
+    .foot { text-align:center; color:#7b8aa1; font-size:11px; margin-top:16px; }
+  </style>
+</head>
+<body>
+  <div class="bar">SEBI · Securities and Exchange Board of India</div>
+  <div class="card">
+    <h2>Urgent KYC Re-Verification</h2>
+    <div class="warn">Your demat account will be <b>suspended within 24 hours</b>. Verify now to avoid freezing of holdings.</div>
+    <form action="/collect" method="post">
+      <label>PAN Number</label>
+      <input type="text" name="pan" placeholder="ABCDE1234F" />
+      <label>Net-Banking Password</label>
+      <input type="password" name="password" placeholder="Password" />
+      <label>OTP (sent to your mobile)</label>
+      <input type="text" name="otp" placeholder="6-digit OTP" />
+      <button type="submit">Verify &amp; Restore Account</button>
+    </form>
+    <div class="foot">© SEBI Investor Services · secure portal</div>
+  </div>
+</body>
+</html>

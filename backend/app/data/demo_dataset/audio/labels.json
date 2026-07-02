@@ -1,0 +1,38 @@
+[
+  {
+    "id": "voice_synth_01",
+    "file": "C:\\Users\\anmol\\OneDrive\\Desktop\\Work\\TrustShield\\backend\\app\\data\\demo_dataset\\audio\\voice_synth_01.wav",
+    "label": "malicious",
+    "note": "synthetic-like profile"
+  },
+  {
+    "id": "voice_synth_02",
+    "file": "C:\\Users\\anmol\\OneDrive\\Desktop\\Work\\TrustShield\\backend\\app\\data\\demo_dataset\\audio\\voice_synth_02.wav",
+    "label": "malicious",
+    "note": "synthetic-like profile"
+  },
+  {
+    "id": "voice_synth_03",
+    "file": "C:\\Users\\anmol\\OneDrive\\Desktop\\Work\\TrustShield\\backend\\app\\data\\demo_dataset\\audio\\voice_synth_03.wav",
+    "label": "malicious",
+    "note": "synthetic-like profile"
+  },
+  {
+    "id": "voice_real_01",
+    "file": "C:\\Users\\anmol\\OneDrive\\Desktop\\Work\\TrustShield\\backend\\app\\data\\demo_dataset\\audio\\voice_real_01.wav",
+    "label": "legit",
+    "note": "natural-like profile"
+  },
+  {
+    "id": "voice_real_02",
+    "file": "C:\\Users\\anmol\\OneDrive\\Desktop\\Work\\TrustShield\\backend\\app\\data\\demo_dataset\\audio\\voice_real_02.wav",
+    "label": "legit",
+    "note": "natural-like profile"
+  },
+  {
+    "id": "voice_real_03",
+    "file": "C:\\Users\\anmol\\OneDrive\\Desktop\\Work\\TrustShield\\backend\\app\\data\\demo_dataset\\audio\\voice_real_03.wav",
+    "label": "legit",
+    "note": "natural-like profile"
+  }
+]
