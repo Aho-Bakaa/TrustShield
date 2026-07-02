@@ -116,8 +116,8 @@ reasoning only for ambiguous/high-value cases (measured: see eval output).
 cd TrustShield\backend
 py -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -r requirements.txt
-.\.venv\Scripts\python.exe -m playwright install chromium   # optional but recommended
-copy .env.example .env        # then paste ONE provider key (or leave blank for mock mode)
+.\.venv\Scripts\python.exe -m playwright install chromium   
+copy .env.example .env        
 .\.venv\Scripts\python.exe -m uvicorn app.main:app --reload --port 8000
 ```
 API at http://127.0.0.1:8000 · interactive docs at `/docs`.
@@ -205,22 +205,6 @@ Reports per-channel + overall **precision / recall / F1 / accuracy**, **authenti
 and **operational metrics** (avg latency, % escalated). Labels: `malicious` = should flag
 MEDIUM/HIGH; `legit` = should be LOW. Detection metrics are computed at the flag boundary.
 
-Measured on the current set (render off for determinism):
-
-| Mode | Precision | Recall | F1 | Accuracy | Avg latency |
-|------|-----------|--------|----|----------|-------------|
-| Rule-based (`TS_EVAL_MOCK=1`) | 0.94 | 0.90 | 0.92 | 0.92 | ~21 ms |
-| **Live gpt-oss-20b** | 0.95 | 0.95 | 0.95 | 0.95 | ~712 ms |
-
-The LLM lifts **email recall 0.86 → 1.0** by catching a subtle "new-device login" phish that
-keyword heuristics miss — the concrete argument for the triage→deep escalation design. Numbers
-are **not 1.0**: one borderline authentic voice clip is a false positive, and a coded pump-tip
-post ("about to fly 🚀, not financial advice") is still missed — kept in the set on purpose.
-
-**3. Live render-in-pipeline check** — `run_backend.ps1`, then click the *Phishing* demo chip:
-Playwright loads the fixture (`method: playwright`), extracts the credential-capture form, and
-the LLM reasons over the rendered DOM. Verify via the analyst-trace panel.
-
 ---
 
 ## Non-goals (scope honesty)
@@ -258,12 +242,4 @@ TrustShield/
 
 ---
 
-## Product positioning
 
-> **TrustShield is a multimodal trust and verification layer for India's securities-market
-> communications.** It helps retail investors and intermediaries detect AI-generated phishing,
-> synthetic-voice impersonation, and social-media manipulation, while verifying whether a
-> purportedly official communication is likely genuine. By combining browser-based evidence
-> collection, multimodal detection, reasoning LLMs, and an explainable trust score, it
-> demonstrates a feasible path to improving investor protection and market integrity in line
-> with SEBI's mandate.
