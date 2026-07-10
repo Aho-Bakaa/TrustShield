@@ -1,312 +1,178 @@
-"""Phishing / impersonation detector.
+"""Phishing / impersonation detector — LLM-first scoring.
 
-Triage : manipulation heuristics + URL lexical features (cheap, no network).
-Deep   : renders the most suspicious link (Playwright/HTTP), analyzes a
-         screenshot via the vision model, and asks the reasoning LLM to judge
-         rendered impersonation + credential capture using rich evidence.
+No regex heuristics drive the score. Flow:
+  1. Intent LLM: classifies message intent, extracts claims, identifies impersonation
+  2. Playwright: renders linked pages, collects forensic evidence
+  3. Vision model: analyzes page screenshots for brand imitation
+  4. Web search: verifies factual claims against multiple legitimate sources
+  5. Verdict LLM: synthesizes ALL evidence into a single 0-1 probability
+
+The LLM is the ONLY scoring authority. No static rules, floors, or caps.
 """
 from __future__ import annotations
 
 import time
+from typing import Any
 
+from ..intent import analyze_message
 from ..llm import analyze_screenshot, reason_json
-from ..preprocessing import heuristics
+from ..prompts import load as load_prompt
 from ..render import render
+from ..search import extract_claims, verify_claims_sync
 from ..schemas import AnalysisRequest, ChannelType, DetectorResult, Evidence
-
-_SYS = (
-    "You are a securities-market phishing analyst. Given a message, the RENDERED "
-    "evidence of any linked page, page metadata, and a VISION MODEL'S visual assessment "
-    "of the page screenshot, judge whether this is a phishing / impersonation attempt "
-    "targeting retail investors.\n\n"
-    "CRITICAL CALIBRATION RULES:\n"
-    "- A login/password form on a brand's REAL verified domain (e.g. kite.zerodha.com/login, "
-    "groww.in/login, sebi.gov.in) is NORMAL and NOT phishing -> phishing_probability < 0.15.\n"
-    "- Phishing means the page DETECTIVELY imitates a brand on a DIFFERENT or lookalike domain, "
-    "OR captures sensitive data on a non-brand domain (typosquat, IP address, .xyz/.top/.click, shortener).\n"
-    "- Trust the vision model when it says a page does NOT look deceptive. A clean, professional "
-    "broker login page on the correct domain with no deceptive visual imitation is legit.\n"
-    "- A page that merely MENTIONS SEBI/NSE/RBI by name in a news article or educational post "
-    "is NOT phishing.\n\n"
-    "Consider: brand impersonation, domain mismatch, credential/OTP/payment capture, "
-    "redirect chains, page metadata (og_site_name, meta_description), and the VISION "
-    "SCREENSHOT analysis (imitates_brand, looks_deceptive, page_type).\n"
-    "Respond ONLY as JSON with keys: phishing_probability (0-1 float), impersonated_entity "
-    "(string or null), domain_mismatch (bool), credential_capture (bool), "
-    "explanation (<=60 words)."
-)
 
 
 def _pick_link(req: AnalysisRequest):
     if not req.links:
         return None
-    ranked = sorted(
-        req.links,
-        key=lambda l: (l.allowlisted, -len(l.reasons)),
-    )
+    ranked = sorted(req.links, key=lambda l: (l.allowlisted, -len(l.reasons)))
     for l in ranked:
         if not l.allowlisted:
             return l
     return ranked[0]
 
 
-def _base_probability(req: AnalysisRequest, h: dict) -> float:
-    score = h["score"] * 0.6
-    link = _pick_link(req)
-    if link and not link.allowlisted:
-        score += min(0.12 * len(link.reasons), 0.4)
-    if link and link.allowlisted:
-        score -= 0.25
-    crit = max((e.criticality for e in req.entities), default=0.0)
-    if crit >= 0.9 and link and not link.allowlisted:
-        score += 0.15
-    return max(0.0, min(score, 1.0))
-
-
 def run(req: AnalysisRequest, deep: bool) -> DetectorResult:
     t0 = time.time()
-    h = heuristics.scan(req.raw_input)
     evidence: list[Evidence] = []
-
-    for cat, phrases in h["categories"].items():
-        evidence.append(
-            Evidence(
-                source="phishing",
-                label=heuristics.CATEGORY_LABELS.get(cat, cat),
-                detail="Matched: " + ", ".join(phrases[:4]),
-                weight=0.12,
-                severity="medium",
-            )
-        )
-
-    link = _pick_link(req)
-    if link and not link.allowlisted and link.reasons:
-        evidence.append(
-            Evidence(
-                source="phishing",
-                label=f"Suspicious link: {link.registered_domain or link.domain}",
-                detail="; ".join(link.reasons),
-                weight=0.2,
-                severity="high",
-            )
-        )
-    if link and link.allowlisted:
-        evidence.append(
-            Evidence(
-                source="phishing",
-                label=f"Link on official allowlist: {link.registered_domain}",
-                detail="Destination domain is a known official source.",
-                weight=-0.3,
-                severity="info",
-            )
-        )
-
-    prob = _base_probability(req, h)
-    impersonated = req.entities[0].text if req.entities else None
-    fields = {
-        "impersonated_entity": impersonated,
-        "domain_mismatch": bool(link and not link.allowlisted and any("brand token" in r for r in link.reasons)),
-        "credential_capture": "credential_request" in h["categories"],
-        "manipulation_categories": h["fired"],
-    }
-    explanation = "Triage: manipulation phrasing and URL lexical features."
     used_llm = False
     used_render = False
 
-    if deep:
-        rendered = None
-        if link:  # Render ALL links — even allowlisted ones get forensic analysis
-            rendered = render(link.raw)
-            used_render = True
-            if rendered.get("rendered"):
-                if rendered.get("cross_domain_redirect"):
-                    evidence.append(Evidence(
-                        source="phishing", label="Cross-domain redirect chain",
-                        detail=" -> ".join(rendered.get("redirect_chain", [])[:4]),
-                        weight=0.2, severity="high"))
-                if rendered.get("captures_sensitive"):
-                    evidence.append(Evidence(
-                        source="phishing", label="Rendered page captures credentials",
-                        detail=f"Form(s) request password/OTP/payment on {rendered.get('final_url','')}",
-                        weight=0.3, severity="high"))
-                    fields["credential_capture"] = True
-                if rendered.get("title"):
-                    evidence.append(Evidence(
-                        source="phishing", label="Rendered page title",
-                        detail=rendered["title"][:160], weight=0.05, severity="info"))
+    entities_list = [e.text for e in req.entities]
 
-        forensic = rendered.get("forensic", {}) if rendered else {}
-        if forensic:
-            if forensic.get("is_https") is False:
+    link = _pick_link(req)
+    intent = analyze_message(req.raw_input, entities_list,
+                             link_allowlisted=bool(link and link.allowlisted),
+                             link_suspicious=bool(link and link.suspicious and not link.allowlisted),
+                             link_reasons=link.reasons if link else None)
+    used_llm = True
+
+    evidence.append(Evidence(
+        source="intent", label="Message intent analysis",
+        detail=f"Intent: {intent.get('intent', 'unknown')}. "
+               f"Impersonation: {intent.get('impersonation_target', 'none')}. "
+               f"{intent.get('explanation', '')}",
+        weight=0.0, severity="info"))
+
+    if intent.get("urgency_detected"):
+        evidence.append(Evidence(
+            source="intent", label="Urgency or threat detected",
+            detail="Message contains artificial urgency or threat of account action.",
+            weight=0.1, severity="medium"))
+    if intent.get("credential_request_detected"):
+        evidence.append(Evidence(
+            source="intent", label="Credential request detected",
+            detail="Message actively asks for OTP, password, KYC, or credentials.",
+            weight=0.15, severity="high" if intent.get("urgency_detected") else "medium"))
+    if intent.get("authority_claim_detected"):
+        evidence.append(Evidence(
+            source="intent", label="Authority claim detected",
+            detail="Message claims or implies official regulatory/broker authority.",
+            weight=0.08, severity="low"))
+
+    prob = intent.get("phishing_probability", 0.25)
+    impersonated = intent.get("impersonation_target")
+    fields: dict[str, Any] = {
+        "impersonated_entity": impersonated,
+        "intent": intent.get("intent"),
+        "domain_mismatch": False,
+        "credential_capture": intent.get("credential_request_detected", False),
+    }
+    explanation = intent.get("explanation", "")
+
+    if link:
+        rendered = render(link.raw)
+        used_render = True
+
+        if rendered.get("rendered"):
+            if rendered.get("cross_domain_redirect"):
                 evidence.append(Evidence(
-                    source="phishing", label="Page served over HTTP (not HTTPS)",
-                    detail=f"{rendered.get('final_url','')} uses plain HTTP — no transport encryption.",
-                    weight=0.12, severity="medium"))
-            if forensic.get("console_error_count", 0) >= 3:
-                evidence.append(Evidence(
-                    source="phishing", label=f"Browser console errors ({forensic.get('console_error_count')})",
-                    detail=f"Page triggered {forensic.get('console_error_count')} console errors — "
-                           "possible broken or hastily-built page.",
-                    weight=0.08, severity="low"))
-            if forensic.get("failed_request_count", 0) >= 2:
-                evidence.append(Evidence(
-                    source="phishing", label=f"Failed network requests ({forensic.get('failed_request_count')})",
-                    detail="Page attempted to load resources that failed — may indicate broken infrastructure.",
-                    weight=0.06, severity="low"))
-            if forensic.get("iframe_count", 0) > 0:
-                iframe_srcs = forensic.get("iframe_sources", [])
-                evidence.append(Evidence(
-                    source="phishing", label=f"Page contains {forensic.get('iframe_count')} iframe(s)",
-                    detail=f"Embedded frame sources: {', '.join(iframe_srcs[:3])}" if iframe_srcs
-                    else "Page embeds external content via iframes.",
-                    weight=0.1, severity="medium"))
-            if forensic.get("cross_domain_link_count", 0) >= 5:
-                evidence.append(Evidence(
-                    source="phishing", label=f"Page links to {forensic.get('cross_domain_link_count')} external domains",
-                    detail="High number of cross-domain links — may be a gateway or redirect landing page.",
-                    weight=0.08, severity="low"))
-            if forensic.get("meta_refresh_tag"):
-                evidence.append(Evidence(
-                    source="phishing", label="Meta refresh redirect detected",
-                    detail=f"Page uses meta refresh to redirect: {forensic.get('meta_refresh_tag')}",
+                    source="phishing", label="Cross-domain redirect chain",
+                    detail=" -> ".join(rendered.get("redirect_chain", [])[:4]),
                     weight=0.15, severity="high"))
-            if forensic.get("resource_count", 0) < 3:
+            if rendered.get("captures_sensitive"):
                 evidence.append(Evidence(
-                    source="phishing", label="Sparsely populated page",
-                    detail=f"Page loads only {forensic.get('resource_count')} resources — "
-                           "may be a bare credential-harvesting form.",
-                    weight=0.1, severity="medium"))
+                    source="phishing", label="Page captures sensitive data",
+                    detail=f"Form(s) request password/OTP/payment on {rendered.get('final_url','')}",
+                    weight=0.2, severity="high"))
+                fields["credential_capture"] = True
+            if rendered.get("title"):
+                evidence.append(Evidence(
+                    source="phishing", label="Rendered page title",
+                    detail=rendered["title"][:160], weight=0.03, severity="info"))
 
-        screenshot_analysis: dict = {}
-        if rendered and rendered.get("screenshot_b64"):
-            screenshot_analysis, _ = analyze_screenshot(rendered["screenshot_b64"])
-            if screenshot_analysis:
-                if screenshot_analysis.get("looks_deceptive"):
-                    evidence.append(Evidence(
-                        source="phishing", label="Screenshot looks deceptive (vision)",
-                        detail=f"Vision model: page visually imitates {screenshot_analysis.get('imitates_brand') or 'a brand'}. "
-                               f"{screenshot_analysis.get('notes','')}",
-                        weight=0.25, severity="high"))
-                elif screenshot_analysis.get("imitates_brand"):
-                    evidence.append(Evidence(
-                        source="phishing", label="Brand imitation detected (vision)",
-                        detail=f"Vision model: page resembles {screenshot_analysis.get('imitates_brand')} "
-                               f"(page_type={screenshot_analysis.get('page_type')}). "
-                               f"deceptive={screenshot_analysis.get('looks_deceptive')}. "
-                               f"{screenshot_analysis.get('notes','')}",
-                        weight=0.15, severity="medium"))
-                else:
-                    evidence.append(Evidence(
-                        source="phishing", label="Screenshot visually assessed (vision)",
-                        detail=f"Vision model: page_type={screenshot_analysis.get('page_type')}, "
-                               f"deceptive={screenshot_analysis.get('looks_deceptive')}. "
-                               f"{screenshot_analysis.get('notes','')}",
-                        weight=0.0, severity="info"))
-                fields["screenshot_vision"] = {k: v for k, v in screenshot_analysis.items() if v}
+            forensic = rendered.get("forensic", {})
+            if forensic:
+                _add_forensic_evidence(evidence, forensic, rendered)
 
-        rendered_summary = "None"
-        if rendered and rendered.get("rendered"):
-            rendered_summary = (
-                f"final_url={rendered.get('final_url')} title={rendered.get('title')!r} "
-                f"og_site_name={rendered.get('og_site_name')!r} "
-                f"meta_description={rendered.get('meta_description','')[:120]!r} "
-                f"has_login_form={rendered.get('has_login_form')} "
-                f"captures_sensitive={rendered.get('captures_sensitive')} "
-                f"has_password={rendered.get('has_login_form')} "
-                f"external_domains={rendered.get('external_domains')} "
-                f"redirect_chain={rendered.get('redirect_chain')} "
-                f"cross_domain_redirect={rendered.get('cross_domain_redirect')} "
-                f"text_excerpt={rendered.get('text_excerpt','')[:600]!r}"
+                fields["rendered"] = {
+                    "method": rendered.get("method"),
+                    "final_url": rendered.get("final_url"),
+                    "title": rendered.get("title"),
+                    "has_login_form": rendered.get("has_login_form"),
+                    "captures_sensitive": rendered.get("captures_sensitive"),
+                    "redirect_chain": rendered.get("redirect_chain"),
+                    "og_site_name": rendered.get("og_site_name"),
+                    "meta_description": rendered.get("meta_description"),
+                    "external_domains": rendered.get("external_domains"),
+                    "forensic": _summarize_forensic(forensic),
+                }
+
+            screenshot_analysis: dict = {}
+            if rendered.get("screenshot_b64"):
+                screenshot_analysis, _ = analyze_screenshot(rendered["screenshot_b64"])
+                _add_screenshot_evidence(evidence, screenshot_analysis, fields)
+
+            claims = intent.get("claims_to_verify", []) or extract_claims(req.raw_input)
+            claim_results = verify_claims_sync(claims)
+            _add_claim_evidence(evidence, claim_results)
+
+            rendered_summary = _build_rendered_summary(rendered)
+            forensic_summary = _build_forensic_summary(forensic)
+            screenshot_summary = _build_screenshot_summary(screenshot_analysis)
+            claim_summary = _build_claim_summary(claim_results)
+
+            user = (
+                f"MESSAGE:\n{req.raw_input[:2000]}\n\n"
+                f"INTENT ANALYSIS:\n"
+                f"  classification={intent.get('intent')} "
+                f"impersonation={impersonated} "
+                f"credential_request={intent.get('credential_request_detected')} "
+                f"urgency={intent.get('urgency_detected')} "
+                f"explanation={intent.get('explanation')}\n\n"
+                f"RENDERED PAGE:\n{rendered_summary}\n\n"
+                f"FORENSIC DATA:\n{forensic_summary}\n\n"
+                f"SCREENSHOT ANALYSIS:\n{screenshot_summary}\n\n"
+                f"CLAIM VERIFICATION:\n{claim_summary}\n\n"
+                f"LINK: {link.raw} (allowlisted={link.allowlisted})\n"
             )
-        forensic_summary = "No forensic data."
-        if forensic:
-            forensic_summary = (
-                f"is_https={forensic.get('is_https')} protocol={forensic.get('protocol')} "
-                f"final_domain={forensic.get('final_domain')} "
-                f"iframe_count={forensic.get('iframe_count')} "
-                f"iframe_sources={forensic.get('iframe_sources',[])} "
-                f"cross_domain_link_count={forensic.get('cross_domain_link_count')} "
-                f"cross_domain_links={[(l.get('href',''), l.get('text','')) for l in forensic.get('cross_domain_links',[])[:5]]} "
-                f"resource_count={forensic.get('resource_count')} "
-                f"failed_requests={forensic.get('failed_requests',[])[:5]} "
-                f"console_errors={forensic.get('console_error_count',0)} "
-                f"meta_refresh={forensic.get('meta_refresh_tag')} "
-                f"script_count={forensic.get('script_count')} "
-                f"form_count={forensic.get('form_count')} "
-                f"input_count={forensic.get('input_count')} "
-                f"link_domain_pairs={[(l.get('href',''), l.get('text','')[:50]) for l in forensic.get('all_links',[])[:10]]}"
-            )
-        screenshot_summary = "No screenshot available."
-        if screenshot_analysis:
-            screenshot_summary = (
-                f"page_type={screenshot_analysis.get('page_type')} "
-                f"imitates_brand={screenshot_analysis.get('imitates_brand')} "
-                f"is_login_or_payment={screenshot_analysis.get('is_login_or_payment')} "
-                f"looks_deceptive={screenshot_analysis.get('looks_deceptive')} "
-                f"notes={screenshot_analysis.get('notes')}"
-            )
-        user = (
-            f"MESSAGE:\n{req.raw_input[:1800]}\n\n"
-            f"DETECTED ENTITIES: {[e.text for e in req.entities]}\n"
-            f"LINK: {link.raw if link else 'none'} (allowlisted={link.allowlisted if link else 'n/a'}, "
-            f"reasons={link.reasons if link else []})\n"
-            f"RENDERED PAGE EVIDENCE:\n{rendered_summary}\n\n"
-            f"BROWSER FORENSIC DATA:\n{forensic_summary}\n\n"
-            f"VISION SCREENSHOT ANALYSIS:\n{screenshot_summary}\n"
-        )
 
-        def _fallback():
-            return {
-                "phishing_probability": prob,
-                "impersonated_entity": impersonated,
-                "domain_mismatch": fields["domain_mismatch"],
-                "credential_capture": fields["credential_capture"],
-                "explanation": "Rule-based verdict (LLM unavailable): "
-                + ("credential-capture + suspicious link. " if fields["credential_capture"] else "")
-                + ("manipulation phrasing present." if h["fired"] else "limited signals."),
-            }
+            def _neutral():
+                return {
+                    "phishing_probability": prob,
+                    "impersonated_entity": impersonated,
+                    "domain_mismatch": fields.get("domain_mismatch", False),
+                    "credential_capture": fields.get("credential_capture", False),
+                    "key_evidence": ["LLM unavailable — heuristic fallback"],
+                    "explanation": "Limited assessment without LLM.",
+                    "recommended_action": "verify",
+                }
 
-        data, used_llm = reason_json(_SYS, user, _fallback)
-        if used_llm:
+            data, used_llm = reason_json(load_prompt("phishing_verdict.txt"), user, _neutral)
             try:
                 prob = float(data.get("phishing_probability", prob))
             except Exception:
                 pass
-        else:
-            prob = _base_probability(req, h)
-        prob = max(0.0, min(prob, 1.0))
-        fields["impersonated_entity"] = data.get("impersonated_entity", impersonated)
-        fields["domain_mismatch"] = bool(data.get("domain_mismatch", fields["domain_mismatch"]))
-        fields["credential_capture"] = bool(data.get("credential_capture", fields["credential_capture"]))
-        explanation = data.get("explanation", explanation)
-        if rendered:
-            fields["rendered"] = {
-                "method": rendered.get("method"),
-                "final_url": rendered.get("final_url"),
-                "title": rendered.get("title"),
-                "has_login_form": rendered.get("has_login_form"),
-                "captures_sensitive": rendered.get("captures_sensitive"),
-                "redirect_chain": rendered.get("redirect_chain"),
-                "og_site_name": rendered.get("og_site_name"),
-                "meta_description": rendered.get("meta_description"),
-                "external_domains": rendered.get("external_domains"),
-            }
-            if forensic:
-                fields["rendered"]["forensic"] = {
-                    "is_https": forensic.get("is_https"),
-                    "protocol": forensic.get("protocol"),
-                    "final_domain": forensic.get("final_domain"),
-                    "iframe_count": forensic.get("iframe_count"),
-                    "cross_domain_link_count": forensic.get("cross_domain_link_count"),
-                    "cross_domain_links": forensic.get("cross_domain_links", [])[:5],
-                    "resource_count": forensic.get("resource_count"),
-                    "failed_request_count": forensic.get("failed_request_count"),
-                    "console_error_count": forensic.get("console_error_count"),
-                    "meta_refresh_tag": forensic.get("meta_refresh_tag"),
-                    "script_count": forensic.get("script_count"),
-                    "form_count": forensic.get("form_count"),
-                    "input_count": forensic.get("input_count"),
-                }
+            prob = max(0.0, min(prob, 1.0))
+
+            fields["impersonated_entity"] = data.get("impersonated_entity", impersonated)
+            fields["domain_mismatch"] = bool(data.get("domain_mismatch", False))
+            fields["credential_capture"] = bool(data.get("credential_capture", False))
+            explanation = data.get("explanation", explanation)
+            for k in data.get("key_evidence", [])[:5]:
+                evidence.append(Evidence(
+                    source="verdict", label="Key evidence",
+                    detail=str(k)[:200], weight=0.1, severity="info"))
 
     label = "Likely phishing" if prob >= 0.6 else ("Suspicious" if prob >= 0.35 else "Low phishing risk")
     return DetectorResult(
@@ -321,3 +187,205 @@ def run(req: AnalysisRequest, deep: bool) -> DetectorResult:
         used_llm=used_llm,
         used_render=used_render,
     )
+
+
+def _add_forensic_evidence(evidence: list[Evidence], forensic: dict, rendered: dict) -> None:
+    tls = forensic.get("tls_info", {})
+    sec = forensic.get("security_headers", {})
+    js = forensic.get("js_forensics", {})
+
+    if forensic.get("is_https") is False:
+        evidence.append(Evidence(
+            source="forensic", label="No HTTPS",
+            detail="Page served over plain HTTP — no transport encryption.",
+            weight=0.1, severity="medium"))
+    if tls.get("available") and tls.get("not_before"):
+        evidence.append(Evidence(
+            source="forensic", label="TLS Certificate",
+            detail=f"Issuer: {tls.get('issuer', {})}, valid from {tls.get('not_before')}.",
+            weight=0.02, severity="info"))
+    if not sec.get("csp"):
+        evidence.append(Evidence(
+            source="forensic", label="Missing CSP header",
+            detail="No Content-Security-Policy — page has no script/image source restrictions.",
+            weight=0.05, severity="low"))
+    if not sec.get("hsts"):
+        evidence.append(Evidence(
+            source="forensic", label="Missing HSTS header",
+            detail="No Strict-Transport-Security header.",
+            weight=0.03, severity="low"))
+    if forensic.get("console_error_count", 0) >= 3:
+        evidence.append(Evidence(
+            source="forensic", label=f"Console errors ({forensic.get('console_error_count')})",
+            detail=f"Page triggered {forensic.get('console_error_count')} browser console errors.",
+            weight=0.06, severity="low"))
+    if forensic.get("failed_request_count", 0) >= 3:
+        evidence.append(Evidence(
+            source="forensic", label=f"Failed network requests ({forensic.get('failed_request_count')})",
+            detail="Multiple resources failed to load — possibly broken infrastructure.",
+            weight=0.08, severity="medium"))
+    if forensic.get("meta_refresh_tag"):
+        evidence.append(Evidence(
+            source="forensic", label="Meta refresh redirect",
+            detail=f"Page uses meta refresh: {forensic.get('meta_refresh_tag')}",
+            weight=0.15, severity="high"))
+    if forensic.get("iframe_count", 0) > 0:
+        iframe_srcs = forensic.get("iframe_sources", [])
+        evidence.append(Evidence(
+            source="forensic", label=f"Page contains {forensic.get('iframe_count')} iframe(s)",
+            detail=f"Embedded frames: {', '.join(iframe_srcs[:3])}" if iframe_srcs else "External iframes present.",
+            weight=0.08, severity="medium"))
+    if forensic.get("cross_domain_link_count", 0) >= 5:
+        evidence.append(Evidence(
+            source="forensic", label=f"Many cross-domain links ({forensic.get('cross_domain_link_count')})",
+            detail="High number of outbound links to external domains.",
+            weight=0.05, severity="low"))
+    whois = forensic.get("whois", {})
+    if whois.get("creation_date"):
+        evidence.append(Evidence(
+            source="forensic", label="Domain registration",
+            detail=f"Domain registered: {whois.get('creation_date')}. Registrar: {whois.get('registrar', 'unknown')}.",
+            weight=0.02, severity="info"))
+    if js.get("hidden_inputs") and len(js.get("hidden_inputs", [])) >= 3:
+        evidence.append(Evidence(
+            source="forensic", label="Multiple hidden form fields",
+            detail=f"{len(js.get('hidden_inputs'))} hidden input fields — possible phishing kit.",
+            weight=0.1, severity="medium"))
+    if forensic.get("dialogues"):
+        evidence.append(Evidence(
+            source="forensic", label=f"Browser dialogs triggered ({len(forensic.get('dialogues'))})",
+            detail=f"Page attempted popups/dialogs: {'; '.join(forensic.get('dialogues', [])[:3])}",
+            weight=0.1, severity="medium"))
+    if forensic.get("popup_count", 0) > 0:
+        evidence.append(Evidence(
+            source="forensic", label=f"Popups detected ({forensic.get('popup_count')})",
+            detail="Page attempted to open popup windows.",
+            weight=0.12, severity="medium"))
+
+
+def _add_screenshot_evidence(evidence: list[Evidence], screenshot: dict, fields: dict) -> None:
+    if not screenshot:
+        return
+    if screenshot.get("looks_deceptive"):
+        evidence.append(Evidence(
+            source="vision", label="Screenshot looks deceptive",
+            detail=f"Vision model: page visually imitates {screenshot.get('imitates_brand') or 'a brand'}. "
+                   f"{screenshot.get('notes', '')}",
+            weight=0.25, severity="high"))
+    elif screenshot.get("imitates_brand"):
+        evidence.append(Evidence(
+            source="vision", label="Brand resemblance detected",
+            detail=f"Vision: page resembles {screenshot.get('imitates_brand')} "
+                   f"({screenshot.get('page_type')}). Deceptive: {screenshot.get('looks_deceptive')}. "
+                   f"{screenshot.get('notes', '')}",
+            weight=0.05, severity="info"))
+    else:
+        evidence.append(Evidence(
+            source="vision", label="Screenshot visually assessed",
+            detail=f"Vision: page_type={screenshot.get('page_type')}, "
+                   f"deceptive={screenshot.get('looks_deceptive')}. {screenshot.get('notes', '')}",
+            weight=0.0, severity="info"))
+    fields["screenshot_vision"] = {k: v for k, v in screenshot.items() if v}
+
+
+def _add_claim_evidence(evidence: list[Evidence], claim_results: list[dict]) -> None:
+    for claim in claim_results:
+        if claim.get("verified"):
+            evidence.append(Evidence(
+                source="search", label="Claim verified",
+                detail=f"'{claim.get('text', '')[:120]}' — verified by {len(claim.get('sources', []))} sources.",
+                weight=-0.1, severity="info"))
+        elif claim.get("contradicted"):
+            evidence.append(Evidence(
+                source="search", label="Claim CONTRADICTED",
+                detail=f"'{claim.get('text', '')[:120]}' — contradicted by official sources.",
+                weight=0.3, severity="high"))
+        else:
+            evidence.append(Evidence(
+                source="search", label="Claim unverified",
+                detail=f"'{claim.get('text', '')[:120]}' — could not verify from any source.",
+                weight=0.05, severity="low"))
+
+
+def _build_rendered_summary(rendered: dict) -> str:
+    if not rendered or not rendered.get("rendered"):
+        return "No rendered page."
+    return (
+        f"final_url={rendered.get('final_url')} title={rendered.get('title')!r} "
+        f"og_site_name={rendered.get('og_site_name')!r} "
+        f"meta_description={rendered.get('meta_description', '')[:150]!r} "
+        f"has_login_form={rendered.get('has_login_form')} "
+        f"captures_sensitive={rendered.get('captures_sensitive')} "
+        f"redirect_chain={rendered.get('redirect_chain')} "
+        f"cross_domain={rendered.get('cross_domain_redirect')} "
+        f"text_excerpt={rendered.get('text_excerpt', '')[:600]!r}"
+    )
+
+
+def _build_forensic_summary(forensic: dict) -> str:
+    if not forensic:
+        return "No forensic data."
+    tls = forensic.get("tls_info", {})
+    sec = forensic.get("security_headers", {})
+    whois = forensic.get("whois", {})
+    js = forensic.get("js_forensics", {})
+    return (
+        f"is_https={forensic.get('is_https')} final_domain={forensic.get('final_domain')} "
+        f"console_errors={forensic.get('console_error_count', 0)} "
+        f"failed_requests={forensic.get('failed_request_count', 0)} "
+        f"iframes={forensic.get('iframe_count', 0)} "
+        f"cross_domain_links={forensic.get('cross_domain_link_count', 0)} "
+        f"meta_refresh={forensic.get('meta_refresh_tag')} "
+        f"form_count={forensic.get('form_count')} input_count={forensic.get('input_count')} "
+        f"resource_count={forensic.get('resource_count')} "
+        f"TLS: protocol={tls.get('protocol')} issuer={tls.get('issuer', {})} "
+        f"not_before={tls.get('not_before')} "
+        f"CSP={'yes' if sec.get('csp') else 'no'} "
+        f"HSTS={'yes' if sec.get('hsts') else 'no'} "
+        f"WHOIS: created={whois.get('creation_date')} "
+        f"registrar={whois.get('registrar')} "
+        f"JS: hidden_inputs={len(js.get('hidden_inputs', []))} "
+        f"cookies={js.get('cookie_count', 0)} "
+    )
+
+
+def _build_screenshot_summary(screenshot: dict) -> str:
+    if not screenshot:
+        return "No screenshot."
+    return (
+        f"page_type={screenshot.get('page_type')} "
+        f"imitates_brand={screenshot.get('imitates_brand')} "
+        f"is_login_or_payment={screenshot.get('is_login_or_payment')} "
+        f"looks_deceptive={screenshot.get('looks_deceptive')} "
+        f"notes={screenshot.get('notes')}"
+    )
+
+
+def _build_claim_summary(claims: list[dict]) -> str:
+    if not claims:
+        return "No claims to verify."
+    lines = []
+    for c in claims:
+        status = "VERIFIED" if c.get("verified") else ("CONTRADICTED" if c.get("contradicted") else "UNVERIFIED")
+        lines.append(f"[{status}] {c.get('text', '')[:150]}")
+    return "\n".join(lines)
+
+
+def _summarize_forensic(forensic: dict) -> dict:
+    return {
+        "is_https": forensic.get("is_https"),
+        "final_domain": forensic.get("final_domain"),
+        "iframe_count": forensic.get("iframe_count"),
+        "cross_domain_link_count": forensic.get("cross_domain_link_count"),
+        "resource_count": forensic.get("resource_count"),
+        "failed_request_count": forensic.get("failed_request_count"),
+        "console_error_count": forensic.get("console_error_count"),
+        "meta_refresh_tag": forensic.get("meta_refresh_tag"),
+        "script_count": forensic.get("script_count"),
+        "form_count": forensic.get("form_count"),
+        "input_count": forensic.get("input_count"),
+        "tls": forensic.get("tls_info", {}),
+        "security_headers": forensic.get("security_headers", {}),
+        "whois": forensic.get("whois", {}),
+        "js_forensics": forensic.get("js_forensics", {}),
+    } if forensic else {}

@@ -14,14 +14,23 @@ from ..schemas import AnalysisRequest, AuthenticityResult
 
 
 def _mentions_official(req: AnalysisRequest) -> str | None:
+    # 1. First priority: check explicit claimed_source (populated by form or LLM deep analysis)
+    if req.claimed_source:
+        src = req.claimed_source.lower()
+        for d, meta in official_domains().items():
+            if meta["entity"].lower() in src or d.split(".")[0] in src:
+                return meta["entity"]
+        for e in req.entities:
+            if e.text.lower() in src:
+                return e.text
+        return req.claimed_source
+
+    # 2. Second priority: fallback to high criticality entities mentioned in the body
     for e in req.entities:
         if e.criticality >= 0.8:
             return e.text
-    src = (req.claimed_source or "").lower()
-    for d, meta in official_domains().items():
-        if meta["entity"].lower() in src or d.split(".")[0] in src:
-            return meta["entity"]
     return None
+
 
 
 def assess(req: AnalysisRequest) -> AuthenticityResult:
