@@ -6,7 +6,7 @@ backend/uploads/
 backend/*.db
 backend/*.log
 backend/.env
-
+ARCHITECTURE.md
 # Node / Next
 frontend/node_modules/
 frontend/.next/

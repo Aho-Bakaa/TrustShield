@@ -14,9 +14,9 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 _PROVIDER_DEFAULTS = {
-    "groq": "groq/openai/gpt-oss-20b",
-    "openrouter": "openrouter/openai/gpt-oss-20b",
-    "gemini": "gemini/gemini-2.0-flash",
+    "groq": "groq/openai/gpt-oss-120b",
+    "openrouter": "openrouter/openai/gpt-oss-120b",
+    "gemini": "gemini/gemini-2.5-flash",
 }
 
 _PROVIDER_KEY_ENV = {
@@ -38,9 +38,9 @@ class Settings(BaseSettings):
     llm_provider: str = "groq"
     llm_model: str = ""
     llm_temperature: float = 0.15
-    llm_max_tokens: int = 1600
-    llm_timeout_seconds: int = 30
-    llm_reasoning_effort: str = "low"
+    llm_max_tokens: int = 3200
+    llm_timeout_seconds: int = 60
+    llm_reasoning_effort: str = "medium"
 
     llm_vision_model: str = "groq/meta-llama/llama-4-scout-17b-16e-instruct"
 

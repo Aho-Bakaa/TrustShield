@@ -35,6 +35,7 @@ _DETECTOR_FOR = {
     ChannelType.URL: phishing,
     ChannelType.SOCIAL: social,
     ChannelType.AUDIO: voice,
+    ChannelType.QUERY: phishing,
     ChannelType.UNKNOWN: phishing,
 }
 
@@ -86,18 +87,20 @@ def _confidence(primary, auth) -> float:
 
 def _threat_label(primary, level: RiskLevel, channel: ChannelType, auth) -> str:
     if auth.is_official_source and level == RiskLevel.LOW:
-        return f"Verified official communication - {auth.matched_entity}"
+        return f"Verified official communication — {auth.matched_entity}"
+    if auth.is_official_source and level == RiskLevel.MEDIUM:
+        return f"Official source — needs review"
     imp = primary.fields.get("impersonated_entity") or primary.fields.get("impersonation_target")
     base = {
-        ChannelType.EMAIL: "Phishing impersonation",
-        ChannelType.URL: "Phishing / credential-capture page",
-        ChannelType.SOCIAL: "Social-media market manipulation",
-        ChannelType.AUDIO: "Suspected synthetic voice impersonation",
+        ChannelType.EMAIL: "Potential phishing",
+        ChannelType.URL: "Suspicious web page",
+        ChannelType.SOCIAL: "Possible market manipulation",
+        ChannelType.AUDIO: "Possible synthetic voice",
     }.get(channel, "Suspicious communication")
     if level == RiskLevel.LOW:
         return f"Low risk ({channel.value})"
     if imp and level != RiskLevel.LOW:
-        return f"{base} - targeting {imp}"
+        return f"{base} — targeting {imp}"
     return base
 
 
@@ -141,7 +144,7 @@ def analyze(req: AnalysisRequest) -> AnalysisResult:
         evidence.append(Evidence(
             source="authenticity", label="Authenticity signal", detail=s,
             weight=(-0.15 if auth.is_official_source else 0.03), severity="info"))
-    if crit >= 0.8 and level != RiskLevel.LOW:
+    if crit >= 0.8 and level != RiskLevel.LOW and not auth.is_official_source:
         top = next((e.text for e in req.entities if e.criticality >= 0.8), "a critical entity")
         evidence.append(Evidence(
             source="fusion", label="High-criticality target",

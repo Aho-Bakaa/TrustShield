@@ -189,6 +189,38 @@ def analyze_screenshot(screenshot_b64: str) -> tuple[dict[str, Any], bool]:
         return {}, False
     try:
         content = _vision_completion(_SCREENSHOT_SYS, screenshot_b64, "image/png", 400)
+        data = _extract_json(content) or {"page_type": "unknown", "notes": content.strip()}
+        _log.info("vision(screenshot) %dms", STATS["last_latency_ms"])
+        return data, True
+    except Exception as exc:
+        _log.warning("screenshot analysis failed: %s", str(exc)[:150])
+        return {}, False
+
+
+def analyze_email_screenshot(image_bytes: bytes, mime: str = "image/png") -> tuple[dict[str, Any], bool]:
+    """Analyze an email screenshot — extract sender, body, URLs, layout signals."""
+    import base64
+    from .prompts import load as load_prompt
+
+    settings = get_settings()
+    if not settings.vision_available or not image_bytes:
+        return {}, False
+    try:
+        content = _vision_completion(
+            load_prompt("email_screenshot.txt"),
+            base64.b64encode(image_bytes).decode(), mime, 1200)
+        data = _extract_json(content) or {"body_text": content.strip(), "urls": [], "notes": "JSON parse failed"}
+        _log.info("vision(email_screenshot) %dms", STATS["last_latency_ms"])
+        return data, True
+    except Exception as exc:
+        _log.warning("email screenshot analysis failed: %s", str(exc)[:150])
+        return {}, False
+    """Ask the vision model to assess a rendered-page screenshot for brand imitation."""
+    settings = get_settings()
+    if not settings.vision_available or not screenshot_b64:
+        return {}, False
+    try:
+        content = _vision_completion(_SCREENSHOT_SYS, screenshot_b64, "image/png", 400)
         data = _extract_json(content)
         _log.info("vision(page) %s %dms imitates=%s deceptive=%s",
                   settings.llm_vision_model, STATS["last_latency_ms"],

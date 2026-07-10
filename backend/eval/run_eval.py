@@ -18,10 +18,11 @@ import os
 import sys
 from pathlib import Path
 
-os.environ.setdefault("NETWORK_ENABLED", "false")  # render off for speed/determinism
-# Force rule-based (no LLM) with:  set TS_EVAL_MOCK=1
+os.environ.setdefault("NETWORK_ENABLED", "false")
 if os.environ.get("TS_EVAL_MOCK"):
-    os.environ["FORCE_MOCK_LLM"] = "true"
+    os.environ["GROQ_API_KEY"] = ""
+    os.environ["OPENROUTER_API_KEY"] = ""
+    os.environ["GEMINI_API_KEY"] = ""
 
 # Ensure `app` package importable when run as a script.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))

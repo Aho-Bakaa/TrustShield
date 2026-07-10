@@ -13,7 +13,25 @@
     { "domain": "groww.in", "entity": "Groww", "type": "broker", "criticality": 0.8 },
     { "domain": "icicidirect.com", "entity": "ICICI Direct", "type": "broker", "criticality": 0.8 },
     { "domain": "kite.zerodha.com", "entity": "Zerodha Kite", "type": "broker", "criticality": 0.8 },
-    { "domain": "angelone.in", "entity": "Angel One", "type": "broker", "criticality": 0.8 }
+    { "domain": "angelone.in", "entity": "Angel One", "type": "broker", "criticality": 0.8 },
+    { "domain": "smartodr.in", "entity": "SMART ODR Portal", "type": "official_platform", "criticality": 0.9 },
+    { "domain": "camsonline.com", "entity": "CAMS", "type": "rta", "criticality": 0.85 },
+    { "domain": "digital.camsonline.com", "entity": "CAMS Digital", "type": "rta", "criticality": 0.85 },
+    { "domain": "kfintech.com", "entity": "KFintech", "type": "rta", "criticality": 0.85 },
+    { "domain": "mfs.kfintech.com", "entity": "KFintech MFS", "type": "rta", "criticality": 0.85 },
+    { "domain": "icicipruamc.com", "entity": "ICICI Prudential Mutual Fund", "type": "amc", "criticality": 0.85 },
+    { "domain": "sbimf.com", "entity": "SBI Mutual Fund", "type": "amc", "criticality": 0.85 },
+    { "domain": "hdfcfund.com", "entity": "HDFC Mutual Fund", "type": "amc", "criticality": 0.85 },
+    { "domain": "adityabirlacapital.com", "entity": "Aditya Birla Sun Life Mutual Fund", "type": "amc", "criticality": 0.85 },
+    { "domain": "kotakmf.com", "entity": "Kotak Mahindra Mutual Fund", "type": "amc", "criticality": 0.85 },
+    { "domain": "franklintempleton.co.in", "entity": "Franklin Templeton India", "type": "amc", "criticality": 0.85 },
+    { "domain": "upstox.com", "entity": "Upstox", "type": "broker", "criticality": 0.8 },
+    { "domain": "5paisa.com", "entity": "5paisa", "type": "broker", "criticality": 0.8 },
+    { "domain": "mstock.com", "entity": "m.Stock by Mirae Asset", "type": "broker", "criticality": 0.8 },
+    { "domain": "paytmmoney.com", "entity": "Paytm Money", "type": "broker", "criticality": 0.8 },
+    { "domain": "digilocker.gov.in", "entity": "Digilocker", "type": "official_platform", "criticality": 0.85 },
+    { "domain": "npscra.nsdl.co.in", "entity": "NPS (NSDL)", "type": "official_platform", "criticality": 0.85 },
+    { "domain": "gst.gov.in", "entity": "GST Portal", "type": "official_platform", "criticality": 0.85 }
   ],
   "entities": [
     { "text": "SEBI", "type": "regulator", "criticality": 1.0, "aliases": ["Securities and Exchange Board of India", "securities exchange board"] },
@@ -27,9 +45,12 @@
     { "text": "Groww", "type": "broker", "criticality": 0.8, "aliases": [] },
     { "text": "Angel One", "type": "broker", "criticality": 0.8, "aliases": ["Angel Broking"] },
     { "text": "ICICI Direct", "type": "broker", "criticality": 0.8, "aliases": [] },
+    { "text": "CAMS", "type": "rta", "criticality": 0.85, "aliases": ["Computer Age Management Services", "CAMS Online", "camsonline"] },
+    { "text": "KFintech", "type": "rta", "criticality": 0.85, "aliases": ["KFin Technologies", "KFin", "kfintech"] },
     { "text": "Reliance Industries", "type": "company", "criticality": 0.7, "aliases": ["RIL"] },
     { "text": "Adani", "type": "company", "criticality": 0.7, "aliases": ["Adani Group"] },
     { "text": "Tata", "type": "company", "criticality": 0.7, "aliases": ["TCS", "Tata Motors"] },
-    { "text": "IPO", "type": "scheme", "criticality": 0.5, "aliases": ["initial public offering"] }
+    { "text": "IPO", "type": "scheme", "criticality": 0.5, "aliases": ["initial public offering"] },
+    { "text": "SMART ODR", "type": "official_platform", "criticality": 0.9, "aliases": ["smartodr"] }
   ]
 }

@@ -25,7 +25,6 @@ export default function RootLayout({ children }) {
                 <a href="/" className="rounded-md px-3 py-1.5 text-xs font-semibold text-slate-600 hover:bg-slate-100">Dashboard</a>
                 <a href="/scan" className="rounded-md px-3 py-1.5 text-xs font-semibold text-slate-600 hover:bg-slate-100">Scanner</a>
                 <a href="/registry" className="rounded-md px-3 py-1.5 text-xs font-semibold text-slate-600 hover:bg-slate-100">Registry</a>
-                <a href="/about" className="rounded-md px-3 py-1.5 text-xs font-semibold text-slate-600 hover:bg-slate-100">About</a>
               </nav>
             </div>
           </header>

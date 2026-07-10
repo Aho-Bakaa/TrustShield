@@ -12,6 +12,7 @@ class ChannelType(str, Enum):
     URL = "url"
     AUDIO = "audio"
     SOCIAL = "social"
+    QUERY = "query"
     UNKNOWN = "unknown"
 
 

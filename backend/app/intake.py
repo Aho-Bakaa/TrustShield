@@ -32,6 +32,16 @@ def _host_of(url: str) -> str:
     return (urlparse(u).hostname or "").lower().lstrip("www.")
 
 
+_QUERY_MARKERS = re.compile(
+    r"\?\s*$|^(?:is|are|was|were|will|would|can|could|should|has|have|did|do|does|what|why|how|who|when|where)\b|\?\?+",
+    re.I,
+)
+_HEADLINE_MARKERS = re.compile(
+    r"^(?:BREAKING|JUST IN|UPDATE|ALERT|RUMOUR|RUMOR|NEWS)\b",
+    re.I,
+)
+
+
 def classify_channel(text: str, has_audio: bool, hint: ChannelType | None) -> ChannelType:
     if has_audio:
         return ChannelType.AUDIO
@@ -53,12 +63,25 @@ def classify_channel(text: str, has_audio: bool, hint: ChannelType | None) -> Ch
     if urls and len(text) <= max(len(urls[0]) + 15, 90):
         return ChannelType.URL
 
-    if _EMAIL_MARKERS.search(text) or len(text) > 90:
+    if _EMAIL_MARKERS.search(text):
+        return ChannelType.EMAIL
+
+    if _QUERY_MARKERS.search(text) and len(text) < 300:
+        return ChannelType.QUERY
+
+    if _HEADLINE_MARKERS.search(text) and not urls:
+        return ChannelType.QUERY
+
+    if len(text) > 90:
         return ChannelType.EMAIL
 
     if urls:
         return ChannelType.URL
-    return ChannelType.EMAIL  # default: treat pasted message text as email/message
+
+    if len(text) < 120 and ("?" in text or text.count("?") >= 2):
+        return ChannelType.QUERY
+
+    return ChannelType.QUERY
 
 
 def build_request(

@@ -17,7 +17,8 @@ pillow>=10.0
 # Test suite
 pytest>=8.0
 
-# Optional — rendered-page evidence for phishing/social.
-# The app degrades gracefully to an HTTP fetch if these are absent.
-# After `pip install playwright`, run: python -m playwright install chromium
+# Optional — rendered-page evidence for phishing/social
 playwright>=1.45
+# Optional — domain intelligence (gracefully degrades if absent)
+python-whois>=0.9
+dnspython>=2.6

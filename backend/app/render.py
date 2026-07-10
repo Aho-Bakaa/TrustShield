@@ -56,8 +56,8 @@ def _analyze_html(html: str, final_url: str) -> dict[str, Any]:
             "method": (f.get("method") or "GET").upper(),
             "num_inputs": len(inputs),
             "has_password": "password" in types,
-            "captures_credentials": any(k in names for k in
-                ["otp", "pin", "password", "card", "cvv", "upi", "account", "kyc"]) or "password" in types,
+            "captures_credentials": "password" in types or any(k in names for k in
+                ["otp", "pin", "cvv"]),
             "hidden_fields": hidden[:10],
         })
 

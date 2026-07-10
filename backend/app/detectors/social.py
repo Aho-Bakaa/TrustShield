@@ -4,6 +4,7 @@ Same pattern as phishing.py: intent LLM → Playwright → vision → search →
 """
 from __future__ import annotations
 
+import concurrent.futures
 import time
 from typing import Any
 
@@ -11,7 +12,7 @@ from ..intent import analyze_message
 from ..llm import analyze_screenshot, reason_json
 from ..prompts import load as load_prompt
 from ..render import render
-from ..search import extract_claims, verify_claims_sync
+from ..search import verify_batch
 from ..schemas import AnalysisRequest, ChannelType, DetectorResult, Evidence
 
 
@@ -26,33 +27,15 @@ def run(req: AnalysisRequest, deep: bool) -> DetectorResult:
     intent = analyze_message(req.raw_input, entities_list)
     used_llm = True
 
+    classific = intent.get("classification", "uncertain")
     evidence.append(Evidence(
-        source="intent", label="Message intent analysis",
-        detail=f"Intent: {intent.get('intent', 'unknown')}. "
-               f"{intent.get('explanation', '')}",
+        source="intent", label="Message classification",
+        detail=f"Classified as: {classific}. {intent.get('explanation', '')}",
         weight=0.0, severity="info"))
 
-    if intent.get("financial_lure_detected"):
-        evidence.append(Evidence(
-            source="intent", label="Financial lure detected",
-            detail="Message contains guaranteed returns, insider tips, or unrealistic profit claims.",
-            weight=0.15, severity="high"))
-    if intent.get("authority_claim_detected"):
-        evidence.append(Evidence(
-            source="intent", label="False authority claim",
-            detail="Message claims official or regulatory authority.",
-            weight=0.12, severity="medium"))
-    if intent.get("urgency_detected"):
-        evidence.append(Evidence(
-            source="intent", label="Urgency detected",
-            detail="Message uses artificial urgency or scarcity.",
-            weight=0.08, severity="medium"))
-
-    prob = intent.get("phishing_probability", 0.25)
+    prob = 0.10
     fields: dict[str, Any] = {
-        "false_authority": intent.get("authority_claim_detected", False),
-        "suspicious_cta": "join a messaging group" if intent.get("financial_lure_detected") else None,
-        "intent": intent.get("intent"),
+        "classification": classific,
     }
     explanation = intent.get("explanation", "")
 
@@ -144,8 +127,25 @@ def run(req: AnalysisRequest, deep: bool) -> DetectorResult:
                             weight=0.0, severity="info"))
                     fields["screenshot_vision"] = {k: v for k, v in screenshot_analysis.items() if v}
 
-            claims = intent.get("claims_to_verify", []) or extract_claims(req.raw_input)
-            claim_results = verify_claims_sync(claims)
+            claims_raw = intent.get("claims_to_verify", [])
+            if claims_raw and isinstance(claims_raw[0], str):
+                claims = [{"text": c, "type": "llm_claim", "verified": False, "sources": [], "contradicted": False} for c in claims_raw] if claims_raw else []
+            elif claims_raw:
+                claims = claims_raw
+            else:
+                claims = extract_claims(req.raw_input)
+
+            if claims:
+                pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+                search_future = pool.submit(verify_claims_sync, claims)
+                try:
+                    claim_results = search_future.result(timeout=6)
+                except Exception:
+                    claim_results = claims
+                pool.shutdown(wait=False)
+            else:
+                claim_results = []
+
             for claim in claim_results:
                 if claim.get("verified"):
                     evidence.append(Evidence(
@@ -158,26 +158,51 @@ def run(req: AnalysisRequest, deep: bool) -> DetectorResult:
                         detail=f"'{claim.get('text', '')[:120]}' — contradicted by sources.",
                         weight=0.25, severity="high"))
 
-            rendered_summary = (
-                f"final_url={rendered.get('final_url')} title={rendered.get('title')!r} "
-                f"captures_sensitive={rendered.get('captures_sensitive')} "
-                f"cross_domain={rendered.get('cross_domain_redirect')} "
-                f"text_excerpt={rendered.get('text_excerpt', '')[:600]!r}"
-            ) if rendered.get("rendered") else "No rendered page."
+            import json
+            rendered_data = {
+                "final_url": rendered.get("final_url"),
+                "title": rendered.get("title"),
+                "og_site_name": rendered.get("og_site_name"),
+                "captures_sensitive": rendered.get("captures_sensitive"),
+                "cross_domain": rendered.get("cross_domain_redirect"),
+                "external_domains": rendered.get("external_domains", []),
+                "text_excerpt": (rendered.get("text_excerpt") or "")[:800],
+            } if rendered.get("rendered") else "No rendered page."
 
-            screenshot_summary = (
-                f"page_type={screenshot_analysis.get('page_type')} "
-                f"imitates_brand={screenshot_analysis.get('imitates_brand')} "
-                f"looks_deceptive={screenshot_analysis.get('looks_deceptive')}"
-            ) if screenshot_analysis else "No screenshot."
+            forensic = rendered.get("forensic", {})
+            forensic_data = {
+                "is_https": forensic.get("is_https"),
+                "final_domain": forensic.get("final_domain"),
+                "iframe_count": forensic.get("iframe_count"),
+                "cross_domain_link_count": forensic.get("cross_domain_link_count"),
+                "resource_count": forensic.get("resource_count"),
+                "console_errors": forensic.get("console_error_count", 0),
+                "meta_refresh": forensic.get("meta_refresh_tag"),
+                "whois": {
+                    "registrar": forensic.get("whois", {}).get("registrar"),
+                    "creation_date": forensic.get("whois", {}).get("creation_date"),
+                } if forensic.get("whois") else {},
+            } if forensic else "No forensic data."
+
+            screenshot_data = {
+                "page_type": screenshot_analysis.get("page_type"),
+                "imitates_brand": screenshot_analysis.get("imitates_brand"),
+                "looks_deceptive": screenshot_analysis.get("looks_deceptive"),
+                "notes": screenshot_analysis.get("notes"),
+            } if screenshot_analysis else "No screenshot."
+
+            intent_data = {
+                "classification": classific,
+                "confidence": intent.get("confidence", 0.0),
+                "explanation": intent.get("explanation"),
+            }
 
             user = (
-                f"POST TEXT:\n{req.raw_input[:2000]}\n\n"
-                f"INTENT: {intent.get('intent')} "
-                f"financial_lure={intent.get('financial_lure_detected')} "
-                f"authority={intent.get('authority_claim_detected')}\n"
-                f"RENDERED PAGE:\n{rendered_summary}\n\n"
-                f"SCREENSHOT:\n{screenshot_summary}\n"
+                f"## POST TEXT\n{req.raw_input[:2000]}\n\n"
+                f"## INTENT ANALYSIS\n{json.dumps(intent_data, indent=2, default=str)}\n\n"
+                f"## RENDERED PAGE\n{json.dumps(rendered_data, indent=2, default=str)}\n\n"
+                f"## FORENSIC DATA\n{json.dumps(forensic_data, indent=2, default=str)}\n\n"
+                f"## SCREENSHOT\n{json.dumps(screenshot_data, indent=2, default=str)}\n"
             )
 
             def _neutral():
