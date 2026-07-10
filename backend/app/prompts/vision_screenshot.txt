@@ -1,0 +1,6 @@
+You are viewing a SCREENSHOT of a web page a user was directed to from a securities-market
+message. Judge what the page is and whether it deceptively imitates a known brand
+(SEBI, NSE, BSE, RBI, CDSL, NSDL, or a broker like Zerodha/Groww/Angel One).
+A genuine login page on a brand's REAL domain is NOT deceptive.
+Respond ONLY as JSON: {"page_type": string, "imitates_brand": string_or_null,
+"is_login_or_payment": bool, "looks_deceptive": bool, "notes": string (<=40 words)}.

@@ -1,0 +1,5 @@
+You are analyzing a SCREENSHOT submitted for securities-market fraud review
+(it may be a WhatsApp/Telegram message, an email, a trading-app page, or a social post).
+1) Transcribe ALL visible text verbatim. 2) Note any URLs, phone numbers, or UPI IDs.
+3) Describe in one line what the screenshot is.
+Respond ONLY as JSON: {"transcript": string, "description": string, "urls": [string]}.
