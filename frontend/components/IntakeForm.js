@@ -2,11 +2,12 @@
 import { useEffect, useRef, useState } from "react";
 import { analyzeAudio, analyzeImage, analyzeText } from "@/lib/api";
 import { SAMPLES } from "@/lib/samples";
+import { IconFileText, IconVolume2, IconImage, IconShield, IconSparkles } from "./ui";
 
 const MODES = [
-  { key: "text", label: "Text / Email / URL / Social" },
-  { key: "audio", label: "Audio clip" },
-  { key: "image", label: "Image / PDF" },
+  { key: "text", label: "Text / Post / URL", icon: IconFileText },
+  { key: "audio", label: "Audio Spoof", icon: IconVolume2 },
+  { key: "image", label: "Image / PDF", icon: IconImage },
 ];
 
 const ACCEPT = {
@@ -43,13 +44,13 @@ export default function IntakeForm({ onStart, onResult, onError }) {
     try {
       let res;
       if (m === "audio") {
-        if (!fl) throw new Error("Choose an audio file first.");
+        if (!fl) throw new Error("Please select or drop an audio file first.");
         res = await analyzeAudio({ file: fl, claimed_source: c, context: t });
       } else if (m === "image") {
-        if (!fl) throw new Error("Choose an image or PDF first.");
+        if (!fl) throw new Error("Please select, drop or paste an image/PDF first.");
         res = await analyzeImage({ file: fl, claimed_source: c, context: t });
       } else {
-        if (!t.trim()) throw new Error("Paste a message, URL, or post first.");
+        if (!t.trim()) throw new Error("Please input a message, URL, or social post to analyze.");
         res = await analyzeText({ raw_input: t, claimed_source: c || undefined, channel_hint: h || undefined });
       }
       onResult?.(res);
@@ -100,110 +101,181 @@ export default function IntakeForm({ onStart, onResult, onError }) {
   const isUpload = mode === "audio" || mode === "image";
 
   return (
-    <div className="card p-5">
-      <div className="mb-4 flex flex-wrap gap-2">
-        {MODES.map((m) => (
-          <button
-            key={m.key}
-            className={`btn ${mode === m.key ? "btn-primary" : "btn-ghost"}`}
-            onClick={() => { setMode(m.key); setFile(null); }}
-          >
-            {m.label}
-          </button>
-        ))}
+    <div className="card overflow-hidden p-6">
+      <div className="mb-4 flex items-center gap-2 border-b border-slate-200 pb-3">
+        <IconShield className="h-4.5 w-4.5 text-sebiTeal" />
+        <h3 className="text-xs font-bold uppercase tracking-wider text-slate-650">
+          Intake Scan Controller
+        </h3>
       </div>
 
+      {/* Tabs */}
+      <div className="mb-5 flex rounded-xl bg-slate-100 p-1 border border-slate-200">
+        {MODES.map((m) => {
+          const Icon = m.icon;
+          const isActive = mode === m.key;
+          return (
+            <button
+              key={m.key}
+              className={`flex flex-1 items-center justify-center gap-2 rounded-lg py-2 text-xs font-bold transition-all duration-200 ${
+                isActive 
+                  ? "bg-white text-sebiNavy shadow-sm border border-slate-200" 
+                  : "text-slate-500 hover:text-slate-800"
+              }`}
+              onClick={() => { setMode(m.key); setFile(null); }}
+            >
+              <Icon className={`h-4 w-4 ${isActive ? "text-sebiNavy" : "text-slate-400"}`} />
+              <span>{m.label}</span>
+            </button>
+          );
+        })}
+      </div>
+
+      {/* Form Content */}
       {mode === "text" ? (
-        <>
-          <label className="mb-1 block text-xs uppercase tracking-wider text-slate-400">
-            Suspicious content
+        <div className="space-y-1.5">
+          <label className="block text-[10px] uppercase font-bold tracking-wider text-slate-500">
+            Source Raw Input Text / URL
           </label>
           <textarea
             value={text}
             onChange={(e) => setText(e.target.value)}
             rows={7}
-            placeholder="Paste a message / email, a URL, or a social-media post…  (tip: you can also paste a screenshot with Ctrl+V)"
-            className="w-full resize-y rounded-xl border border-edge bg-ink px-3 py-2.5 text-sm text-slate-100 outline-none focus:border-sky-500"
+            placeholder="Paste raw email body, message details, official URLs, or social-media posts. You can also paste screenshots directly using Ctrl+V."
+            className="w-full resize-none rounded-xl border border-slate-250 bg-white px-3.5 py-3 text-xs text-slate-800 outline-none focus:border-sebiNavy/50 focus:ring-1 focus:ring-sebiNavy/20 placeholder-slate-400 transition-all font-mono"
           />
-        </>
+        </div>
       ) : (
-        <div
-          className={`flex flex-col items-center justify-center gap-2 rounded-xl border border-dashed bg-ink px-4 py-8 text-center transition ${dragOver ? "border-sky-500 bg-sky-500/5" : "border-edge"}`}
-          onClick={() => fileRef.current?.click()}
-          onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
-          onDragLeave={() => setDragOver(false)}
-          onDrop={onDrop}
-          role="button"
-        >
-          <input
-            ref={fileRef}
-            type="file"
-            accept={ACCEPT[mode]}
-            className="hidden"
-            onChange={(e) => setFile(e.target.files?.[0] || null)}
-          />
-          <div className="text-2xl">{mode === "image" ? "🖼️" : "🎧"}</div>
-          <div className="text-sm text-slate-300">
-            {file
-              ? `${file.name}`
-              : mode === "image"
-              ? "Click, drag & drop, or paste (Ctrl+V) a screenshot / PDF"
-              : "Click or drag & drop a voice note / call recording"}
+        <div className="space-y-4">
+          <div
+            className={`flex flex-col items-center justify-center gap-3.5 rounded-xl border border-dashed px-4 py-8 text-center cursor-pointer transition-all duration-200 ${
+              dragOver 
+                ? "border-sebiNavy bg-sky-50 shadow-[0_0_12px_rgba(27,104,179,0.08)]" 
+                : "border-slate-300 bg-slate-50/50 hover:border-slate-400"
+            }`}
+            onClick={() => fileRef.current?.click()}
+            onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
+            onDragLeave={() => setDragOver(false)}
+            onDrop={onDrop}
+            role="button"
+          >
+            <input
+              ref={fileRef}
+              type="file"
+              accept={ACCEPT[mode]}
+              className="hidden"
+              onChange={(e) => setFile(e.target.files?.[0] || null)}
+            />
+            
+            <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-white border border-slate-200 text-sebiTeal shadow-sm">
+              {mode === "image" ? <IconImage className="h-6 w-6" /> : <IconVolume2 className="h-6 w-6" />}
+            </div>
+
+            <div className="space-y-1">
+              <div className="text-xs font-bold text-slate-700">
+                {file ? file.name : `Drag & drop your ${mode === "image" ? "image/PDF" : "audio clip"} here`}
+              </div>
+              <div className="text-[10px] text-slate-500 uppercase tracking-wider font-semibold">
+                {file ? `${(file.size / (1024 * 1024)).toFixed(2)} MB` : `or click to browse local files`}
+              </div>
+            </div>
+            
+            <div className="text-[10px] text-slate-500 font-mono">
+              {mode === "image" ? "Supported: PNG · JPG · WEBP · PDF" : "Supported: WAV · FLAC · OGG · MP3 · M4A"}
+            </div>
           </div>
-          <div className="text-xs text-slate-500">
-            {mode === "image" ? "png · jpg · webp · pdf — read by the vision model" : "wav · flac · ogg · mp3 · m4a"}
+
+          <div className="space-y-1.5">
+            <label className="block text-[10px] uppercase font-bold tracking-wider text-slate-500">
+              Additional Context (Optional)
+            </label>
+            <textarea
+              value={text}
+              onChange={(e) => setText(e.target.value)}
+              onClick={(e) => e.stopPropagation()}
+              rows={2}
+              placeholder={mode === "image" ? "Provide any text context, expected sender, or details about the image..." : "Provide caller identity details or claims made in the recording..."}
+              className="w-full resize-none rounded-xl border border-slate-250 bg-white px-3.5 py-3 text-xs text-slate-800 outline-none focus:border-sebiNavy/50 focus:ring-1 focus:ring-sebiNavy/20 placeholder-slate-400 transition-all font-mono"
+            />
           </div>
-          <textarea
-            value={text}
-            onChange={(e) => setText(e.target.value)}
-            onClick={(e) => e.stopPropagation()}
-            rows={2}
-            placeholder={mode === "image" ? "Optional context…" : "Optional context (what the caller claimed)…"}
-            className="mt-2 w-full resize-y rounded-lg border border-edge bg-panel px-3 py-2 text-sm text-slate-100 outline-none focus:border-sky-500"
-          />
         </div>
       )}
 
-      <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
-        <div>
-          <label className="mb-1 block text-xs uppercase tracking-wider text-slate-400">
-            Claimed source (optional)
+      {/* Input Parameters */}
+      <div className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2">
+        <div className="space-y-1.5">
+          <label className="block text-[10px] uppercase font-bold tracking-wider text-slate-500">
+            Claimed Identity Source
           </label>
           <input
             value={claimed}
             onChange={(e) => setClaimed(e.target.value)}
-            placeholder="e.g. SEBI, NSE, Zerodha, company CEO"
-            className="w-full rounded-xl border border-edge bg-ink px-3 py-2.5 text-sm text-slate-100 outline-none focus:border-sky-500"
+            placeholder="e.g. SEBI, Zerodha, NSE"
+            className="w-full rounded-xl border border-slate-250 bg-white px-3.5 py-2.5 text-xs text-slate-855 outline-none focus:border-sebiNavy/50 transition-all font-bold"
           />
         </div>
         {mode === "text" && (
-          <div>
-            <label className="mb-1 block text-xs uppercase tracking-wider text-slate-400">
-              Channel (auto-detected)
+          <div className="space-y-1.5">
+            <label className="block text-[10px] uppercase font-bold tracking-wider text-slate-500">
+              Communication Channel
             </label>
-            <select
-              value={hint}
-              onChange={(e) => setHint(e.target.value)}
-              className="w-full rounded-xl border border-edge bg-ink px-3 py-2.5 text-sm text-slate-100 outline-none focus:border-sky-500"
-            >
-              <option value="">Auto-detect</option>
-              <option value="email">Email / message</option>
-              <option value="url">URL</option>
-              <option value="social">Social post</option>
-            </select>
+            <div className="relative">
+              <select
+                value={hint}
+                onChange={(e) => setHint(e.target.value)}
+                className="w-full appearance-none rounded-xl border border-slate-250 bg-white px-3.5 py-2.5 text-xs text-slate-800 outline-none focus:border-sebiNavy/50 transition-all font-bold"
+              >
+                <option value="">Auto-Detect Mode</option>
+                <option value="email">Email Notification</option>
+                <option value="url">Direct Website Link</option>
+                <option value="social">Social Media Feed</option>
+              </select>
+              <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center pr-3 text-slate-400">
+                <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 9l-7 7-7-7" />
+                </svg>
+              </div>
+            </div>
           </div>
         )}
       </div>
 
-      <button className="btn-primary mt-4 w-full" onClick={() => runAnalyze({ mode, file })} disabled={busy}>
-        {busy ? "Analyzing…" : isUpload ? `Analyze ${mode === "image" ? "image / PDF" : mode}` : "Analyze with TrustShield"}
+      {/* Scan Button */}
+      <button 
+        className="mt-5 w-full flex items-center justify-center gap-2 rounded-xl bg-sebiNavy hover:bg-sebiNavy/90 text-white font-bold text-xs py-3.5 uppercase tracking-widest transition-all duration-300 disabled:opacity-50 disabled:cursor-not-allowed shadow-md" 
+        onClick={() => runAnalyze({ mode, file })} 
+        disabled={busy}
+      >
+        {busy ? (
+          <>
+            <svg className="animate-spin -ml-1 mr-2 h-4 w-4 text-white" fill="none" viewBox="0 0 24 24">
+              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
+            </svg>
+            Executing Security Scan...
+          </>
+        ) : (
+          <>
+            <IconShield className="h-4.5 w-4.5 animate-pulse" />
+            {isUpload ? `Verify ${mode === "image" ? "Image / PDF Document" : "Voice Recording"}` : "Execute Security Scan"}
+          </>
+        )}
       </button>
 
-      <div className="mt-4">
-        <div className="mb-2 text-xs uppercase tracking-wider text-slate-500">Try a demo scenario</div>
+      {/* Demo cases */}
+      <div className="mt-5 border-t border-slate-200 pt-4">
+        <div className="mb-2.5 flex items-center gap-1.5">
+          <IconSparkles className="h-3.5 w-3.5 text-amber-500" />
+          <div className="text-[10px] uppercase font-bold tracking-wider text-slate-500">System Verification Test Cases</div>
+        </div>
         <div className="flex flex-wrap gap-2">
           {SAMPLES.map((s) => (
-            <button key={s.key} className="chip hover:border-sky-500/60" onClick={() => loadSample(s)}>
+            <button 
+              key={s.key} 
+              className="inline-flex items-center gap-1.5 rounded-lg bg-slate-50 hover:bg-slate-100 border border-slate-250 hover:border-slate-350 px-2.5 py-1.5 text-[10px] font-bold text-slate-655 hover:text-slate-800 transition-all duration-200" 
+              onClick={() => loadSample(s)}
+            >
+              <span className="h-1.5 w-1.5 rounded-full bg-sebiTeal" />
               {s.title}
             </button>
           ))}

@@ -7,13 +7,16 @@ module.exports = {
   theme: {
     extend: {
       colors: {
-        ink: "#0b1120",
-        panel: "#111a2e",
-        panel2: "#16223c",
-        edge: "#243356",
+        ink: "#f8fafc",
+        panel: "#ffffff",
+        panel2: "#f1f5f9",
+        edge: "#cbd5e1",
+        sebiNavy: "#002e6e",
+        sebiTeal: "#1b68b3",
+        sebiSlate: "#475569",
       },
       boxShadow: {
-        glow: "0 0 0 1px rgba(56,189,248,0.15), 0 10px 40px -12px rgba(2,6,23,0.9)",
+        glow: "0 4px 6px -1px rgba(0, 0, 0, 0.05), 0 2px 4px -1px rgba(0, 0, 0, 0.03), 0 0 0 1px rgba(0, 0, 0, 0.05)",
       },
       keyframes: {
         pulseline: {
