@@ -1,16 +1,14 @@
 """Provider-agnostic reasoning layer.
 
-Wraps LiteLLM so the same code works against Groq (default: openai/gpt-oss-20b),
-OpenRouter, or Gemini — whichever key is present. When no key is configured (or
-a call fails), it transparently returns a caller-supplied rule-based fallback so
-the demo never hard-crashes on the network.
+Wraps LiteLLM for Groq (default), OpenRouter, or Gemini. Provider errors
+trigger retries with fallback providers. When no provider is available,
+returns a neutral assessment — never fabricates a false analysis.
 
 Robustness notes:
   - gpt-oss reasoning models on Groq reject strict `json_object` mode
-    intermittently, so for them we prompt for JSON and parse it ourselves, and
-    pass `reasoning_effort`.
+    intermittently, so for them we prompt for JSON and parse it ourselves.
   - Any provider error triggers one retry without `response_format` before
-    falling back to rules.
+    falling back to an alternate provider or neutral response.
 """
 from __future__ import annotations
 
@@ -25,7 +23,7 @@ _log = get_logger("llm")
 _JSON_BLOCK = re.compile(r"\{.*\}", re.DOTALL)
 _THINK = re.compile(r"<think>.*?</think>", re.DOTALL | re.IGNORECASE)
 
-STATS: dict[str, Any] = {"calls": 0, "live": 0, "fallback": 0, "last_error": None, "last_latency_ms": 0}
+STATS: dict[str, Any] = {"calls": 0, "live": 0, "neutral": 0, "last_error": None, "last_latency_ms": 0}
 
 
 def _extract_json(text: str) -> dict[str, Any]:
@@ -77,21 +75,21 @@ def _call(messages: list[dict], *, use_response_format: bool) -> str:
 def reason_json(
     system: str,
     user: str,
-    fallback: Callable[[], dict[str, Any]] | dict[str, Any],
+    neutral: Callable[[], dict[str, Any]] | dict[str, Any],
 ) -> tuple[dict[str, Any], bool]:
     """Ask the LLM for a JSON object. Returns (data, used_llm).
 
-    `fallback` is a rule-based dict (or callable) used when the LLM is
-    unavailable or errors out.
+    `neutral` is a dict (or callable) returned when no LLM is available.
+    This is the honest "cannot analyze" assessment — never a fabricated score.
     """
     settings = get_settings()
 
-    def _fallback() -> dict[str, Any]:
-        return fallback() if callable(fallback) else dict(fallback)
+    def _neutral() -> dict[str, Any]:
+        return neutral() if callable(neutral) else dict(neutral)
 
     if not settings.llm_available:
-        STATS["fallback"] += 1
-        return _fallback(), False
+        STATS["neutral"] += 1
+        return _neutral(), False
 
     STATS["calls"] += 1
     messages = [
@@ -108,14 +106,14 @@ def reason_json(
                 STATS["last_error"] = None
                 _log.info("%s live %dms (rf=%s)", settings.resolved_model, STATS["last_latency_ms"], use_rf)
                 return data, True
-        except Exception as exc:  # pragma: no cover - provider variance
+        except Exception as exc:
             STATS["last_error"] = str(exc)[:200]
             _log.warning("LLM call failed (rf=%s): %s", use_rf, str(exc)[:120])
             continue
 
-    STATS["fallback"] += 1
-    _log.warning("%s -> rule-based fallback", settings.resolved_model)
-    data = _fallback()
+    STATS["neutral"] += 1
+    _log.warning("%s unavailable — returning neutral assessment", settings.resolved_model)
+    data = _neutral()
     if STATS["last_error"]:
         data.setdefault("_llm_error", STATS["last_error"])
     return data, False
@@ -208,7 +206,7 @@ def llm_status() -> dict[str, Any]:
         "model": s.resolved_model,
         "available": s.llm_available,
         "reasoning_effort": s.llm_reasoning_effort,
-        "mode": "live" if s.llm_available else "mock (rule-based fallback)",
+        "mode": "live" if s.llm_available else "no provider key configured",
         "vision_model": s.llm_vision_model,
         "vision_available": s.vision_available,
         "stats": dict(STATS),

@@ -1,12 +1,13 @@
-"""Trust Score Engine — orchestrates triage → deep analysis → fusion.
+"""Trust Score Engine — orchestrates pipeline → verdict.
 
 Flow:
-  1. Authenticity assessment (is this a verifiable official source?).
-  2. Cheap triage run of the channel's detector (no network/LLM).
-  3. Escalate to deep analysis (render + LLM) if triage is non-trivial OR a
-     high-criticality entity (SEBI/exchange) is impersonated.
-  4. Fuse detector probability + authenticity + entity criticality + provenance
-     into a single 0-100 risk score, level, confidence, and recommended action.
+  1. Authenticity assessment (allowlist check)
+  2. Detector run (LLM-first scoring)
+  3. Fuse into a display-ready result
+
+Key design decision: The LLM is the ONLY scoring authority. Fusion does NOT
+override the detector's probability. It only assigns display levels (HIGH/MEDIUM/LOW)
+and confidence based on signal richness.
 """
 from __future__ import annotations
 
@@ -37,23 +38,6 @@ _DETECTOR_FOR = {
     ChannelType.UNKNOWN: phishing,
 }
 
-_ALWAYS_DEEP = {ChannelType.URL, ChannelType.SOCIAL, ChannelType.AUDIO}
-
-
-def _escalation_decision(req: AnalysisRequest, triage, auth, crit, threshold):
-    """Return (escalate: bool, reason: str)."""
-    if auth.is_official_source and auth.official_confidence >= 0.7 and triage.probability < 0.3 and not req.links:
-        return False, "verified official source, no links (no deep pass needed)"
-    if req.channel_type in _ALWAYS_DEEP:
-        return True, f"{req.channel_type.value} channel is always deep-analyzed"
-    if req.links:
-        return True, "message contains link(s) to inspect"
-    if crit >= 0.8:
-        return True, "impersonates a high-criticality entity"
-    if triage.probability >= threshold:
-        return True, f"triage {triage.probability:.2f} >= {threshold}"
-    return False, "low triage, no links or critical entities"
-
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -61,54 +45,43 @@ def _now() -> str:
 
 def _recommended_action(level: RiskLevel, channel: ChannelType, verified: bool) -> str:
     if verified and level == RiskLevel.LOW:
-        return ("Appears to be a genuine official communication (allowlisted source). "
-                "Still confirm any sensitive action through the organisation's official app/website.")
+        return ("This appears to be a genuine official communication. "
+                "Still confirm any sensitive action through the organisation's official app or website.")
     if level == RiskLevel.HIGH:
         return {
-            ChannelType.EMAIL: "High risk. Do NOT click links or share OTP/password/KYC. Report to the impersonated entity and SEBI SCORES (scores.sebi.gov.in), then delete.",
+            ChannelType.EMAIL: "High risk. Do NOT click links or share OTP/password/KYC. Report to the impersonated entity and SEBI SCORES, then delete.",
             ChannelType.URL: "High risk. Do NOT enter credentials or payment details on this page. Report the domain and avoid it.",
-            ChannelType.SOCIAL: "High risk. Do NOT act on this tip, join the linked group, or transfer funds. Report the post to the platform and to SEBI.",
-            ChannelType.AUDIO: "High risk. Do NOT act on instructions in this call. Call back on the organisation's official published number to verify before doing anything.",
+            ChannelType.SOCIAL: "High risk. Do NOT act on this tip, join the linked group, or transfer funds. Report the post to the platform.",
+            ChannelType.AUDIO: "High risk. Do NOT act on instructions in this call. Call back on the organisation's official published number to verify.",
         }.get(channel, "High risk. Do not act; verify through official channels and report.")
     if level == RiskLevel.MEDIUM:
-        return ("Suspicious — do not act yet. Independently verify through the official website/app "
-                "or published helpline before sharing information, clicking, or transacting.")
+        return ("Suspicious — do not act yet. Independently verify through the official website or app "
+                "before sharing information, clicking, or transacting.")
     return "No strong threat signals detected. Stay cautious and verify sensitive actions independently."
 
 
-def _fuse(primary, auth, crit: float) -> tuple[float, RiskLevel, str, float]:
-    """Return (risk 0..1, level, severity, confidence)."""
-    risk = primary.probability
-
-    if auth.is_official_source and auth.official_confidence >= 0.8:
-        risk = min(risk, 0.15)                      # verified official caps risk
-    elif auth.official_confidence <= 0.1 and any("NOT verified" in s for s in auth.signals):
-        risk = max(risk, 0.65)                      # claimed-official + off-domain mismatch
-
-    if not auth.provenance_available and risk >= 0.4:
-        risk = min(1.0, risk + 0.05)
-
-    if risk >= 0.6 or (risk >= 0.4 and crit >= 0.8):
-        level, severity = RiskLevel.HIGH, "high"
-    elif risk >= 0.3 or (risk >= 0.22 and crit >= 0.8):
-        level, severity = RiskLevel.MEDIUM, "medium"
+def _level_for(risk: float, is_official: bool, official_conf: float) -> tuple[RiskLevel, str]:
+    if is_official and official_conf >= 0.7 and risk < 0.3:
+        return RiskLevel.LOW, "low"
+    if risk >= 0.6:
+        return RiskLevel.HIGH, "high"
+    elif risk >= 0.3:
+        return RiskLevel.MEDIUM, "medium"
     else:
-        level, severity = RiskLevel.LOW, "low"
+        return RiskLevel.LOW, "low"
 
-    if auth.is_official_source and auth.official_confidence >= 0.7:
-        level, severity = RiskLevel.LOW, "low"
 
+def _confidence(primary, auth) -> float:
     conf = 0.55
     if primary.used_llm:
-        conf += 0.15
+        conf += 0.2
     if primary.used_render:
         conf += 0.1
-    if len(primary.evidence) >= 3:
+    if len(primary.evidence) >= 5:
         conf += 0.1
     if auth.is_official_source or auth.official_confidence <= 0.1:
-        conf += 0.07
-    conf = max(0.4, min(conf, 0.97))
-    return risk, level, severity, conf
+        conf += 0.05
+    return max(0.4, min(conf, 0.98))
 
 
 def _threat_label(primary, level: RiskLevel, channel: ChannelType, auth) -> str:
@@ -150,50 +123,42 @@ def analyze(req: AnalysisRequest) -> AnalysisResult:
                            detail=f"official={auth.is_official_source} "
                                   f"confidence={auth.official_confidence}"))
 
-    triage = detector_mod.run(req, deep=False)
-    trace.append(TraceStep(stage=f"triage:{det_name}",
-                           detail=f"preliminary probability={triage.probability}",
-                           latency_ms=triage.latency_ms))
+    primary = detector_mod.run(req, deep=True)
+    trace.append(TraceStep(stage=f"deep:{det_name}",
+                           detail=f"probability={primary.probability} "
+                                  f"llm={primary.used_llm} render={primary.used_render}",
+                           latency_ms=primary.latency_ms))
 
-    escalate, reason = _escalation_decision(req, triage, auth, crit, settings.triage_escalation_threshold)
-    _log.info("%s triage=%.2f -> %s (%s)", tag, triage.probability,
-              "ESCALATE" if escalate else "triage-only", reason)
+    if primary.fields.get("impersonated_entity") and not req.claimed_source:
+        req.claimed_source = primary.fields["impersonated_entity"]
 
-    if escalate:
-        primary = detector_mod.run(req, deep=True)
-        trace.append(TraceStep(stage=f"deep:{det_name}",
-                               detail=f"probability={primary.probability} "
-                                      f"llm={primary.used_llm} render={primary.used_render} ({reason})",
-                               latency_ms=primary.latency_ms))
-    else:
-        primary = triage
-        trace.append(TraceStep(stage="deep", detail=f"skipped — {reason}"))
-
-    risk, level, severity, confidence = _fuse(primary, auth, crit)
+    risk = primary.probability
+    level, severity = _level_for(risk, auth.is_official_source, auth.official_confidence)
+    confidence = _confidence(primary, auth)
 
     evidence: list[Evidence] = list(primary.evidence)
     for s in auth.signals:
         evidence.append(Evidence(
             source="authenticity", label="Authenticity signal", detail=s,
-            weight=(-0.2 if auth.is_official_source else 0.05), severity="info"))
+            weight=(-0.15 if auth.is_official_source else 0.03), severity="info"))
     if crit >= 0.8 and level != RiskLevel.LOW:
         top = next((e.text for e in req.entities if e.criticality >= 0.8), "a critical entity")
         evidence.append(Evidence(
             source="fusion", label="High-criticality target",
-            detail=f"Impersonation concerns a high-criticality entity ({top}); severity raised.",
-            weight=0.15, severity="high"))
+            detail=f"Impersonation concerns a high-criticality entity ({top}).",
+            weight=0.1, severity="high"))
 
     threat_label = _threat_label(primary, level, req.channel_type, auth)
     action = _recommended_action(level, req.channel_type, auth.is_official_source)
 
     summary = (
-        f"{threat_label}. Risk {int(round(risk*100))}/100 ({level.value}). "
+        f"{threat_label}. Risk {int(round(risk * 100))}/100 ({level.value}). "
         f"{primary.explanation}"
     )
 
     latency = int((datetime.now(timezone.utc) - t_start).total_seconds() * 1000)
     trace.append(TraceStep(stage="fusion",
-                           detail=f"risk={int(round(risk*100))} level={level.value} confidence={confidence}"))
+                           detail=f"risk={int(round(risk * 100))} level={level.value} confidence={confidence:.2f}"))
     _log.info("%s VERDICT risk=%d %s %r llm=%s render=%s %dms", tag, int(round(risk * 100)),
               level.value, threat_label, primary.used_llm, primary.used_render, latency)
 
@@ -213,7 +178,7 @@ def analyze(req: AnalysisRequest) -> AnalysisResult:
         entities=req.entities,
         links=req.links,
         trace=trace,
-        escalated=escalate,
+        escalated=True,
         latency_ms=latency,
         created_at=_now(),
     )
