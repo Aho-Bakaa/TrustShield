@@ -1,17 +1,18 @@
-"""LLM-callable web search tool.
+"""Web search engine for claim verification.
 
-The verdict LLM can invoke search to verify factual claims, check if
-a website/news/article is legitimate, or cross-reference information
-against official regulatory sources and reputable financial news.
+Uses DuckDuckGo Lite (HTML table layout) for reliable, no-API-key search.
 
-Returns structured results the LLM can directly incorporate into its
-final verdict. Uses DuckDuckGo HTML search (no API key required).
+Classification:
+- verified: official source or ≥2 reputable sources confirm the claim
+- contradicted: official source explicitly denies/refutes the claim
+- unverified: results exist but don't confirm or deny
+- not_found: zero results returned (NOT contradicted)
 """
 from __future__ import annotations
 
-from concurrent.futures import ThreadPoolExecutor, Future
+import re
 from typing import Any
-from urllib.parse import quote_plus
+from urllib.parse import quote_plus, urlparse
 
 import httpx
 from bs4 import BeautifulSoup
@@ -21,78 +22,121 @@ from .log import get_logger
 
 _log = get_logger("search")
 
-_TIMEOUT = 6.0
-_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36"
+_OFFICIAL = {"sebi.gov.in", "rbi.org.in", "nseindia.com", "bseindia.com",
+             "scores.sebi.gov.in", "nsdl.co.in", "cdslindia.com", "amfiindia.com"}
+_NEWS = {"moneycontrol.com", "economictimes.indiatimes.com", "livemint.com",
+         "bloombergquint.com", "businesstoday.in", "thehindubusinessline.com",
+         "cnbctv18.com", "ndtvprofit.com"}
 
-_OFFICIAL = {"sebi.gov.in", "rbi.org.in", "nseindia.com", "bseindia.com", "scores.sebi.gov.in", "nsdl.co.in", "cdslindia.com", "amfiindia.com"}
-_NEWS = {"moneycontrol.com", "economictimes.indiatimes.com", "livemint.com", "bloombergquint.com", "businesstoday.in", "thehindubusinessline.com", "cnbctv18.com", "ndtvprofit.com"}
+_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+
+_DENIAL_RE = re.compile(r"denied|refuted|fake|false|hoax|not issued|did not issue|no such|fraudulent|scam", re.I)
+
+
+def _search_ddg(query: str, timeout: float = 8.0) -> list[dict[str, Any]]:
+    """Search via DuckDuckGo Lite (HTML table layout, no JS needed)."""
+    url = "https://lite.duckduckgo.com/lite/"
+    try:
+        with httpx.Client(headers={"User-Agent": _UA}, timeout=timeout, follow_redirects=True) as client:
+            resp = client.post(url, data={"q": query[:120]})
+            if resp.status_code != 200:
+                return []
+    except Exception as exc:
+        _log.debug("ddg lite failed: %s", str(exc)[:80])
+        return []
+
+    soup = BeautifulSoup(resp.text, "html.parser")
+    tds = soup.select("td")
+    results = []
+
+    i = 0
+    while i < len(tds) - 6:
+        text = tds[i].get_text(strip=True)
+        if re.match(r"^\d+\.$", text):
+            title_td = tds[i + 1]
+            snippet_td = tds[i + 3]
+            url_td = tds[i + 5]
+
+            a = title_td.select_one("a")
+            title = (a.get_text(strip=True) if a else title_td.get_text(strip=True))[:120]
+            href = ""
+            if a and a.get("href"):
+                href = a["href"]
+            elif url_td.get_text(strip=True):
+                url_text = url_td.get_text(strip=True)
+                if url_text.startswith("http"):
+                    href = url_text
+                elif "." in url_text:
+                    href = "https://" + url_text
+
+            domain = (urlparse(href).hostname or "").lower().lstrip("www.") if href else ""
+            snippet = snippet_td.get_text(strip=True)[:200]
+
+            if title and domain:
+                results.append({
+                    "title": title,
+                    "domain": domain,
+                    "snippet": snippet,
+                    "url": href[:200],
+                    "is_official": domain in _OFFICIAL,
+                    "is_reputable": domain in _NEWS,
+                })
+            i += 7
+        else:
+            i += 1
+
+    return results[:8]
 
 
 def verify_claim(query: str) -> dict[str, Any]:
     settings = get_settings()
     if not settings.network_enabled:
-        return {"query": query, "verified": False, "results": [], "summary": "Network disabled. Cannot verify."}
+        return {"query": query, "status": "not_found", "verified": False,
+                "contradicted": False, "results": [], "summary": "Network disabled."}
 
-    try:
-        url = f"https://html.duckduckgo.com/html/?q={quote_plus(query[:100])}"
-        with httpx.Client(headers={"User-Agent": _UA}, timeout=_TIMEOUT, follow_redirects=True) as client:
-            resp = client.get(url)
-            if resp.status_code != 200:
-                return {"query": query, "verified": False, "results": [], "summary": "Search unavailable."}
+    results = _search_ddg(query)
 
-            soup = BeautifulSoup(resp.text, "html.parser")
-            results = []
-            for r in soup.select(".result")[:8]:
-                a = r.select_one(".result__a")
-                s = r.select_one(".result__snippet")
-                if a and a.get("href"):
-                    from urllib.parse import urlparse
-                    host = (urlparse(a["href"]).hostname or "").lower().lstrip("www.")
-                    results.append({
-                        "title": a.get_text(strip=True)[:120],
-                        "domain": host,
-                        "snippet": s.get_text(strip=True)[:200] if s else "",
-                        "is_official": host in _OFFICIAL,
-                        "is_reputable": host in _NEWS,
-                    })
+    official = [r for r in results if r["is_official"]]
+    reputable = [r for r in results if r["is_reputable"] and not r["is_official"]]
+    other = [r for r in results if not r["is_official"] and not r["is_reputable"]]
 
-            official = [r for r in results if r["is_official"]]
-            reputable = [r for r in results if r["is_reputable"] and not r["is_official"]]
-            other = [r for r in results if not r["is_official"] and not r["is_reputable"]]
+    verified = len(official) >= 1 or len(reputable) >= 2
 
-            verified = len(official) >= 1 or len(reputable) >= 2
-            contradicted = len(results) == 0
+    contradicted = False
+    for r in official + reputable:
+        if _DENIAL_RE.search(r.get("snippet", "")):
+            contradicted = True
+            break
 
-            summary_parts = []
-            if official:
-                summary_parts.append(f"Found on {len(official)} official sources ({', '.join(r['domain'] for r in official[:2])})")
-            if reputable:
-                summary_parts.append(f"Found on {len(reputable)} news sources ({', '.join(r['domain'] for r in reputable[:2])})")
-            if not summary_parts:
-                summary_parts.append("No matching information found on any official or reputable source")
+    if not results:
+        status = "not_found"
+        summary = "No search results returned."
+    elif contradicted:
+        status = "contradicted"
+        summary = "Official sources contradict this claim."
+    elif verified:
+        status = "verified"
+        src = official[0]["domain"] if official else reputable[0]["domain"]
+        summary = f"Confirmed by {src}."
+    elif reputable:
+        status = "unverified"
+        summary = "Found on news sources but not officially confirmed."
+    else:
+        status = "unverified"
+        summary = "Results found but no official confirmation."
 
-            return {
-                "query": query,
-                "verified": verified,
-                "contradicted": contradicted,
-                "total_results": len(results),
-                "official_sources": len(official),
-                "news_sources": len(reputable),
-                "results": (official + reputable + other)[:6],
-                "summary": ". ".join(summary_parts),
-            }
-    except Exception as exc:
-        _log.debug("search failed: %s", str(exc)[:80])
-        return {"query": query, "verified": False, "results": [], "summary": f"Search error: {str(exc)[:80]}"}
+    return {
+        "query": query,
+        "status": status,
+        "verified": verified,
+        "contradicted": contradicted,
+        "total_results": len(results),
+        "official_sources": len(official),
+        "news_sources": len(reputable),
+        "results": (official + reputable + other)[:6],
+        "summary": summary,
+    }
 
 
 def verify_batch(queries: list[str]) -> list[dict[str, Any]]:
-    results = []
-    with ThreadPoolExecutor(max_workers=3) as pool:
-        futures = {pool.submit(verify_claim, q): q for q in queries}
-        for f in futures:
-            try:
-                results.append(f.result(timeout=_TIMEOUT + 2))
-            except Exception:
-                results.append({"query": futures[f], "verified": False, "results": [], "summary": "Search timed out"})
-    return results
+    return [verify_claim(q) for q in queries]

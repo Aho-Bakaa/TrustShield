@@ -8,16 +8,40 @@ const SEV_BORDER = {
   info: "border-l-slate-400 bg-slate-50/60",
 };
 
+const SKIP_PATTERNS = [
+  /no cryptographic provenance/i,
+  /no verifiable official/i,
+  /cannot be cryptographically/i,
+  /claim unverified/i,
+];
+
+function dedupe(evidence) {
+  const seen = new Set();
+  const out = [];
+  for (const e of evidence) {
+    const key = `${e.source}:${e.label}`;
+    if (seen.has(key)) continue;
+    if (SKIP_PATTERNS.some(p => p.test(e.detail || "")) && e.severity === "info") continue;
+    if (e.source === "verdict" && e.label === "Key evidence" && evidence.some(
+      se => se.source === "search" && se.detail && e.detail && se.detail.substring(0, 40) === e.detail.substring(0, 40)
+    )) continue;
+    seen.add(key);
+    out.push(e);
+  }
+  return out;
+}
+
 export default function EvidenceList({ evidence }) {
-  if (!evidence?.length) return null;
+  const filtered = dedupe(evidence || []);
+  if (!filtered.length) return null;
   return (
     <div className="rounded-2xl border border-slate-200 bg-white p-6">
       <div className="mb-4 flex items-center gap-2 border-b border-slate-200 pb-3">
         <IconShield className="h-4 w-4 text-sebiTeal" />
-        <h3 className="text-xs font-bold uppercase tracking-wider text-slate-600">Evidence ({evidence.length} signals)</h3>
+        <h3 className="text-xs font-bold uppercase tracking-wider text-slate-600">Evidence ({filtered.length} signals)</h3>
       </div>
       <div className="space-y-2">
-        {evidence.map((e, i) => {
+        {filtered.map((e, i) => {
           const borderStyle = SEV_BORDER[e.severity] || SEV_BORDER.info;
           return (
             <div key={i} className={`flex gap-3 rounded-xl border-l-[3px] border-y border-r border-slate-200 p-3 ${borderStyle}`}>

@@ -12,12 +12,11 @@ export default function Dashboard() {
         </p>
       </div>
 
-      <div className="mb-12 grid grid-cols-2 gap-4 md:grid-cols-4">
+      <div className="mb-12 grid grid-cols-2 gap-4 md:grid-cols-3">
         {[
           { label: "Detection Channels", value: "4", sub: "Email · URL · Social · Audio" },
           { label: "Trust Registry", value: "18+", sub: "SEBI · NSE · BSE · Brokers · RTAs" },
           { label: "Evidence Sources", value: "12+", sub: "DOM · TLS · WHOIS · DNS · Vision" },
-          { label: "Pipeline", value: "LLM-first", sub: "Playwright · Vision · Search · Verdict" },
         ].map((s, i) => (
           <div key={i} className="rounded-xl border border-slate-200 bg-white p-5">
             <div className="text-[10px] font-bold uppercase tracking-wider text-slate-400">{s.label}</div>

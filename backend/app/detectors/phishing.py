@@ -26,6 +26,15 @@ from ..schemas import AnalysisRequest, ChannelType, DetectorResult, Evidence
 
 _log = get_logger("phishing")
 
+_OFFICIAL_DOMAINS = {"sebi.gov.in", "rbi.org.in", "nseindia.com", "bseindia.com",
+                     "scores.sebi.gov.in", "nsdl.co.in", "cdslindia.com", "amfiindia.com"}
+
+_CSRF_FIELD = re.compile(r"_csrf|csrf_token|csrfmiddleware|__RequestVerification|xsrf|anticsrf", re.I) if False else None
+
+import re as _re
+_CSRF_FIELD = _re.compile(r"_csrf|csrf_token|csrfmiddleware|__RequestVerification|xsrf|anticsrf", _re.I)
+_SEARCH_FIELD = _re.compile(r"search|query|q=|keyword", _re.I)
+
 
 def _pick_link(req: AnalysisRequest):
     if not req.links:
@@ -50,6 +59,7 @@ def run(req: AnalysisRequest, deep: bool) -> DetectorResult:
 
     entities_list = [e.text for e in req.entities]
     link = _pick_link(req)
+    is_official = link and link.allowlisted and link.registered_domain in _OFFICIAL_DOMAINS
 
     intent = analyze_message(req.raw_input, entities_list,
                              link_allowlisted=bool(link and link.allowlisted),
@@ -63,7 +73,6 @@ def run(req: AnalysisRequest, deep: bool) -> DetectorResult:
         detail=f"Classified as: {classific}. {intent.get('explanation', '')}",
         weight=0.0, severity="info"))
 
-    prob = 0.10
     impersonated = intent.get("impersonation_target")
     fields: dict[str, Any] = {
         "impersonated_entity": impersonated,
@@ -84,26 +93,36 @@ def run(req: AnalysisRequest, deep: bool) -> DetectorResult:
         used_render = True
 
     if rendered and rendered.get("rendered"):
-        if rendered.get("cross_domain_redirect"):
-            evidence.append(Evidence(source="phishing", label="Cross-domain redirect chain",
-                detail=" -> ".join(rendered.get("redirect_chain", [])[:4]), weight=0.15, severity="high"))
-        if rendered.get("captures_sensitive"):
-            evidence.append(Evidence(source="phishing", label="Login or password form detected",
-                detail=f"Page contains password or credential input on {rendered.get('final_url','')}",
-                weight=0.1, severity="medium"))
-            fields["credential_capture"] = True
-        if rendered.get("title"):
-            evidence.append(Evidence(source="phishing", label="Rendered page title",
-                detail=rendered["title"][:160], weight=0.03, severity="info"))
+        page_status = rendered.get("status")
+        is_dead_page = page_status and (page_status >= 400 or page_status == 0)
+
+        if is_dead_page:
+            evidence.append(Evidence(source="phishing", label="Link resolved to error page",
+                detail=f"HTTP {page_status} at {rendered.get('final_url','')[:120]}. Link may be expired or broken.",
+                weight=0.0, severity="info"))
+        else:
+            if rendered.get("cross_domain_redirect"):
+                evidence.append(Evidence(source="phishing", label="Cross-domain redirect chain",
+                    detail=" -> ".join(rendered.get("redirect_chain", [])[:4]), weight=0.15, severity="high"))
+            if rendered.get("captures_sensitive"):
+                evidence.append(Evidence(source="phishing", label="Login or password form detected",
+                    detail=f"Page contains password or credential input on {rendered.get('final_url','')}",
+                    weight=0.1, severity="medium"))
+                fields["credential_capture"] = True
+            if rendered.get("title"):
+                evidence.append(Evidence(source="phishing", label="Rendered page title",
+                    detail=rendered["title"][:160], weight=0.03, severity="info"))
 
         forensic = rendered.get("forensic", {})
-        if forensic:
-            _add_forensic_evidence(evidence, forensic, rendered)
+        if forensic and not is_dead_page:
+            _add_forensic_evidence(evidence, forensic, rendered, is_official)
             fields["rendered"] = _summarize_rendered_fields(rendered, forensic)
             forensic_summary = _build_forensic_summary(forensic)
+        elif is_dead_page:
+            forensic_summary = f"Page returned HTTP {page_status} — forensic analysis skipped."
 
         screenshot_analysis: dict = {}
-        if rendered.get("screenshot_b64"):
+        if rendered.get("screenshot_b64") and not is_dead_page:
             screenshot_analysis, _ = analyze_screenshot(rendered["screenshot_b64"])
             _add_screenshot_evidence(evidence, screenshot_analysis, fields)
             screenshot_summary = _build_screenshot_summary(screenshot_analysis)
@@ -149,6 +168,7 @@ def run(req: AnalysisRequest, deep: bool) -> DetectorResult:
                         f"reasons={link.reasons}")
 
     user = (
+        f"## INPUT TYPE\n{req.channel_type.value}\n\n"
         f"## ORIGINAL MESSAGE\n{req.raw_input[:2000]}\n\n"
         f"## INTENT ANALYSIS\n{json.dumps(intent_data, indent=2, default=str)}\n\n"
         f"## LINK CONTEXT\n{link_context}\n\n"
@@ -159,53 +179,97 @@ def run(req: AnalysisRequest, deep: bool) -> DetectorResult:
     )
 
     def _neutral():
-        is_phish = classific == "phishing_email"
-        if is_phish:
-            return {"phishing_probability": 0.85, "impersonated_entity": impersonated,
+        channel = req.channel_type.value
+        if is_official:
+            return {"threat_probability": 0.05, "input_type": channel,
+                    "impersonated_entity": impersonated,
+                    "domain_mismatch": False, "credential_capture": False,
+                    "key_evidence": ["Official government domain."],
+                    "explanation": "Link is on an official government domain.",
+                    "recommended_action": "ignore"}
+        if classific in ("regulatory_circular",):
+            return {"threat_probability": 0.05, "input_type": channel,
+                    "impersonated_entity": impersonated,
+                    "domain_mismatch": False, "credential_capture": False,
+                    "key_evidence": ["Regulatory circular pattern."],
+                    "explanation": "Official regulatory communication pattern.",
+                    "recommended_action": "ignore"}
+        if classific == "phishing_email":
+            return {"threat_probability": 0.80, "input_type": channel,
+                    "impersonated_entity": impersonated,
                     "domain_mismatch": True, "credential_capture": True,
-                    "key_evidence": ["Link analysis flagged as phishing."],
-                    "explanation": "Determined from link reputation analysis.",
+                    "key_evidence": ["Phishing email pattern detected."],
+                    "explanation": "Email with phishing characteristics.",
                     "recommended_action": "report"}
+        if classific in ("broker_notification", "mutual_fund_statement", "educational_content"):
+            return {"threat_probability": 0.10, "input_type": channel,
+                    "impersonated_entity": impersonated,
+                    "domain_mismatch": False, "credential_capture": False,
+                    "key_evidence": [], "explanation": "Legitimate communication pattern.",
+                    "recommended_action": "ignore"}
+        if classific == "spam_or_rumor":
+            if channel in ("query", "image"):
+                return {"threat_probability": 0.55, "input_type": channel,
+                        "impersonated_entity": impersonated,
+                        "domain_mismatch": False, "credential_capture": False,
+                        "key_evidence": ["Unverified claims — misinformation risk."],
+                        "explanation": "Contains unverified claims. Search verification required.",
+                        "recommended_action": "verify"}
+            return {"threat_probability": 0.50, "input_type": channel,
+                    "impersonated_entity": impersonated,
+                    "domain_mismatch": False, "credential_capture": False,
+                    "key_evidence": ["Unverified claims — needs search verification."],
+                    "explanation": "Contains unverified claims. Web search required.",
+                    "recommended_action": "verify"}
         if link and link.suspicious and not link.allowlisted:
-            return {"phishing_probability": 0.55, "impersonated_entity": impersonated,
+            return {"threat_probability": 0.60, "input_type": channel,
+                    "impersonated_entity": impersonated,
                     "domain_mismatch": True, "credential_capture": False,
                     "key_evidence": [f"Suspicious link: {link.reasons}"],
                     "explanation": "Link flagged with warning signals.",
                     "recommended_action": "caution"}
-        return {"phishing_probability": 0.05, "impersonated_entity": impersonated,
+        return {"threat_probability": 0.15, "input_type": channel,
+                "impersonated_entity": impersonated,
                 "domain_mismatch": False, "credential_capture": False,
-                "key_evidence": [], "explanation": "No strong phishing signals.",
+                "key_evidence": [], "explanation": "No strong threat signals.",
                 "recommended_action": "verify"}
 
     data, used_llm = reason_json(load_prompt("phishing_verdict.txt"), user, _neutral)
 
+    search_results = []
     if used_llm:
         queries = data.get("search_queries")
         if not queries or not isinstance(queries, list):
             queries = intent.get("claims_to_verify") or [req.raw_input[:100]]
-        if isinstance(queries[0], dict):
+        if queries and isinstance(queries[0], dict):
             queries = [q.get("text", str(q)) for q in queries]
-        queries = [str(q)[:200] for q in queries]
+        queries = [str(q)[:200] for q in (queries or [])]
         try:
             search_results = verify_batch(queries)
             search_json = json.dumps(search_results, indent=2, default=str)
             follow_up = user + f"\n\n## SEARCH RESULTS\n{search_json}\n\nNow produce FINAL verdict JSON (no search_queries field)."
             data, _ = reason_json(load_prompt("phishing_verdict.txt"), follow_up, _neutral)
-            for sr in search_results:
-                if sr.get("verified"):
-                    evidence.append(Evidence(source="search", label="Claim verified",
-                        detail=f"'{sr.get('query','')[:120]}' — {sr.get('summary','')}", weight=-0.1, severity="info"))
-                elif sr.get("contradicted"):
-                    evidence.append(Evidence(source="search", label="Claim contradicted",
-                        detail=f"'{sr.get('query','')[:120]}' — {sr.get('summary','')}", weight=0.3, severity="high"))
-                else:
-                    evidence.append(Evidence(source="search", label="Search result",
-                        detail=f"'{sr.get('query','')[:120]}' — {sr.get('summary','')}", weight=0.0, severity="info"))
         except Exception:
             _log.debug("search batch failed")
 
+    for sr in search_results:
+        status = sr.get("status", "unverified")
+        if status == "verified":
+            evidence.append(Evidence(source="search", label="Claim verified",
+                detail=f"'{sr.get('query','')[:120]}' — {sr.get('summary','')}", weight=-0.1, severity="info"))
+        elif status == "contradicted":
+            evidence.append(Evidence(source="search", label="Claim contradicted",
+                detail=f"'{sr.get('query','')[:120]}' — {sr.get('summary','')}", weight=0.3, severity="high"))
+        elif status == "not_found":
+            evidence.append(Evidence(source="search", label="Search result",
+                detail=f"'{sr.get('query','')[:120]}' — {sr.get('summary','')}", weight=0.0, severity="info"))
+        else:
+            evidence.append(Evidence(source="search", label="Unverified claim",
+                detail=f"'{sr.get('query','')[:120]}' — {sr.get('summary','')}", weight=0.05, severity="low"))
+
+    prob = 0.15
     try:
-        prob = float(data.get("phishing_probability", prob))
+        prob = float(data.get("threat_probability", prob))
     except Exception:
         pass
     prob = max(0.0, min(prob, 1.0))
@@ -218,7 +282,11 @@ def run(req: AnalysisRequest, deep: bool) -> DetectorResult:
         evidence.append(Evidence(source="verdict", label="Key evidence",
             detail=str(k)[:200], weight=0.1, severity="info"))
 
-    label = "Likely phishing" if prob >= 0.6 else ("Suspicious" if prob >= 0.35 else "Low phishing risk")
+    channel = req.channel_type.value
+    if channel in ("query", "image"):
+        label = "Likely misinformation" if prob >= 0.6 else ("Suspicious claims" if prob >= 0.35 else "Low risk")
+    else:
+        label = "Likely phishing" if prob >= 0.6 else ("Suspicious" if prob >= 0.35 else "Low phishing risk")
     return DetectorResult(name="phishing", channel=req.channel_type,
         probability=round(prob, 3), label=label, fields=fields,
         evidence=evidence, explanation=explanation,
@@ -237,7 +305,7 @@ def _verify_sync(claims):
     return claims
 
 
-def _add_forensic_evidence(evidence: list[Evidence], forensic: dict, rendered: dict) -> None:
+def _add_forensic_evidence(evidence: list[Evidence], forensic: dict, rendered: dict, is_official: bool) -> None:
     tls = forensic.get("tls_info", {})
     sec = forensic.get("security_headers", {})
     js = forensic.get("js_forensics", {})
@@ -249,13 +317,16 @@ def _add_forensic_evidence(evidence: list[Evidence], forensic: dict, rendered: d
         evidence.append(Evidence(source="forensic", label="TLS Certificate",
             detail=f"Issuer: {tls.get('issuer', {})}, valid from {tls.get('not_before')}.",
             weight=0.02, severity="info"))
-    if not sec.get("csp"):
-        evidence.append(Evidence(source="forensic", label="Missing CSP header",
-            detail="No Content-Security-Policy.", weight=0.05, severity="low"))
-    if not sec.get("hsts"):
-        evidence.append(Evidence(source="forensic", label="Missing HSTS header",
-            detail="No Strict-Transport-Security.", weight=0.03, severity="low"))
-    if forensic.get("console_error_count", 0) >= 3:
+
+    if not is_official:
+        if not sec.get("csp"):
+            evidence.append(Evidence(source="forensic", label="Missing CSP header",
+                detail="No Content-Security-Policy.", weight=0.05, severity="low"))
+        if not sec.get("hsts"):
+            evidence.append(Evidence(source="forensic", label="Missing HSTS header",
+                detail="No Strict-Transport-Security.", weight=0.03, severity="low"))
+
+    if forensic.get("console_error_count", 0) >= 5:
         evidence.append(Evidence(source="forensic", label=f"Console errors ({forensic.get('console_error_count')})",
             detail=f"Page triggered {forensic.get('console_error_count')} browser errors.",
             weight=0.06, severity="low"))
@@ -279,10 +350,15 @@ def _add_forensic_evidence(evidence: list[Evidence], forensic: dict, rendered: d
         evidence.append(Evidence(source="forensic", label="Domain registration",
             detail=f"Registered: {whois.get('creation_date')}. Registrar: {whois.get('registrar', 'unknown')}.",
             weight=0.02, severity="info"))
-    if js.get("hidden_inputs") and len(js.get("hidden_inputs", [])) >= 3:
-        evidence.append(Evidence(source="forensic", label="Multiple hidden form fields",
-            detail=f"{len(js.get('hidden_inputs'))} hidden inputs — possible phishing kit.",
-            weight=0.1, severity="medium"))
+
+    if not is_official:
+        hidden = js.get("hidden_inputs", [])
+        non_csrf = [h for h in hidden if not _CSRF_FIELD.search(h.get("name", ""))]
+        if len(non_csrf) >= 3:
+            evidence.append(Evidence(source="forensic", label="Multiple hidden form fields",
+                detail=f"{len(non_csrf)} non-CSRF hidden inputs — possible phishing kit.",
+                weight=0.1, severity="medium"))
+
     if forensic.get("dialogues"):
         evidence.append(Evidence(source="forensic", label=f"Browser dialogs ({len(forensic.get('dialogues'))})",
             detail=f"Popups/dialogs: {'; '.join(forensic.get('dialogues', [])[:3])}",
@@ -312,17 +388,22 @@ def _add_screenshot_evidence(evidence: list[Evidence], screenshot: dict, fields:
 
 def _add_claim_evidence(evidence: list[Evidence], claim_results: list[dict]) -> None:
     for claim in claim_results:
-        if claim.get("verified"):
+        status = claim.get("status", "unverified")
+        if status == "verified":
             evidence.append(Evidence(source="search", label="Claim verified",
                 detail=f"'{claim.get('text', '')[:120]}' — verified by {len(claim.get('sources', []))} sources.",
                 weight=-0.1, severity="info"))
-        elif claim.get("contradicted"):
+        elif status == "contradicted":
             evidence.append(Evidence(source="search", label="Claim CONTRADICTED",
                 detail=f"'{claim.get('text', '')[:120]}' — contradicted by official sources.",
                 weight=0.3, severity="high"))
-        else:
+        elif status == "not_found":
             evidence.append(Evidence(source="search", label="Claim unverified",
                 detail=f"'{claim.get('text', '')[:120]}' — not found in any source.",
+                weight=0.05, severity="low"))
+        else:
+            evidence.append(Evidence(source="search", label="Claim unverified",
+                detail=f"'{claim.get('text', '')[:120]}' — {claim.get('summary', '')}",
                 weight=0.05, severity="low"))
 
 
@@ -348,7 +429,6 @@ def _build_forensic_summary(forensic: dict) -> str:
     sec = forensic.get("security_headers", {})
     whois = forensic.get("whois", {})
     js = forensic.get("js_forensics", {})
-    dns = forensic.get("dns", {})
     failed = forensic.get("failed_requests", [])
     links_raw = forensic.get("all_links", [])
 

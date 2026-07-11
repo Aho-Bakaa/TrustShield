@@ -20,7 +20,7 @@ function VerdictHeader({ result }) {
           <div className="flex flex-wrap items-center gap-2">
             <LevelChip level={result.risk_level} />
             <span className="rounded-md bg-slate-100 px-2 py-0.5 text-[10px] font-bold uppercase text-slate-500">
-              {isQuery ? "question" : result.channel_type}
+              {isQuery ? "question" : result.channel_type === "query" ? "image/file" : result.channel_type}
             </span>
           </div>
           <h2 className={`text-lg font-extrabold tracking-tight ${s ? s.text : "text-slate-800"}`}>{result.threat_label}</h2>

@@ -38,9 +38,9 @@ class Settings(BaseSettings):
     llm_provider: str = "groq"
     llm_model: str = ""
     llm_temperature: float = 0.15
-    llm_max_tokens: int = 3200
-    llm_timeout_seconds: int = 60
-    llm_reasoning_effort: str = "medium"
+    llm_max_tokens: int = 1200
+    llm_timeout_seconds: int = 30
+    llm_reasoning_effort: str = ""
 
     llm_vision_model: str = "groq/meta-llama/llama-4-scout-17b-16e-instruct"
 

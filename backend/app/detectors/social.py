@@ -5,6 +5,7 @@ Same pattern as phishing.py: intent LLM → Playwright → vision → search →
 from __future__ import annotations
 
 import concurrent.futures
+import json
 import time
 from typing import Any
 
@@ -33,16 +34,20 @@ def run(req: AnalysisRequest, deep: bool) -> DetectorResult:
         detail=f"Classified as: {classific}. {intent.get('explanation', '')}",
         weight=0.0, severity="info"))
 
-    prob = 0.10
-    fields: dict[str, Any] = {
-        "classification": classific,
-    }
+    fields: dict[str, Any] = {"classification": classific}
     explanation = intent.get("explanation", "")
 
     target = None
     for l in req.links:
         target = l
         break
+
+    rendered = None
+    screenshot_analysis: dict = {}
+    claim_summary = "No claims to verify."
+    rendered_summary = "No rendered page."
+    forensic_summary = "No forensic data."
+    screenshot_summary = "No screenshot."
 
     if target:
         rendered = render(target.raw)
@@ -71,21 +76,11 @@ def run(req: AnalysisRequest, deep: bool) -> DetectorResult:
                         source="social", label="Linked page served over HTTP",
                         detail="No transport encryption — insecure link destination.",
                         weight=0.08, severity="medium"))
-                if forensic.get("cross_domain_link_count", 0) >= 5:
-                    evidence.append(Evidence(
-                        source="social", label=f"Page links to {forensic.get('cross_domain_link_count')} external domains",
-                        detail="High number of outbound links — possible gateway or link-farm.",
-                        weight=0.06, severity="low"))
                 if forensic.get("meta_refresh_tag"):
                     evidence.append(Evidence(
                         source="social", label="Meta refresh redirect detected",
                         detail=f"Page uses meta refresh to redirect: {forensic.get('meta_refresh_tag')}",
                         weight=0.15, severity="high"))
-                if forensic.get("iframe_count", 0) > 0:
-                    evidence.append(Evidence(
-                        source="social", label=f"Page embeds {forensic.get('iframe_count')} iframe(s)",
-                        detail="External content embedded via iframes.",
-                        weight=0.06, severity="medium"))
 
                 fields["rendered"] = {
                     "method": rendered.get("method"),
@@ -101,7 +96,6 @@ def run(req: AnalysisRequest, deep: bool) -> DetectorResult:
                         "iframe_count": forensic.get("iframe_count"),
                         "cross_domain_link_count": forensic.get("cross_domain_link_count"),
                         "resource_count": forensic.get("resource_count"),
-                        "failed_request_count": forensic.get("failed_request_count"),
                         "console_error_count": forensic.get("console_error_count"),
                         "meta_refresh_tag": forensic.get("meta_refresh_tag"),
                         "tls": forensic.get("tls_info", {}),
@@ -109,7 +103,6 @@ def run(req: AnalysisRequest, deep: bool) -> DetectorResult:
                     } if forensic else {},
                 }
 
-            screenshot_analysis: dict = {}
             if rendered.get("screenshot_b64"):
                 screenshot_analysis, _ = analyze_screenshot(rendered["screenshot_b64"])
                 if screenshot_analysis:
@@ -147,18 +140,23 @@ def run(req: AnalysisRequest, deep: bool) -> DetectorResult:
                 claim_results = []
 
             for claim in claim_results:
-                if claim.get("verified"):
+                status = claim.get("status", "unverified")
+                if status == "verified":
                     evidence.append(Evidence(
                         source="search", label="Claim verified",
                         detail=f"'{claim.get('text', '')[:120]}' — verified by {len(claim.get('sources', []))} sources.",
                         weight=-0.1, severity="info"))
-                elif claim.get("contradicted"):
+                elif status == "contradicted":
                     evidence.append(Evidence(
                         source="search", label="Claim CONTRADICTED",
                         detail=f"'{claim.get('text', '')[:120]}' — contradicted by sources.",
                         weight=0.25, severity="high"))
+                elif status == "not_found":
+                    evidence.append(Evidence(
+                        source="search", label="Search result",
+                        detail=f"'{claim.get('text', '')[:120]}' — not found.",
+                        weight=0.0, severity="info"))
 
-            import json
             rendered_data = {
                 "final_url": rendered.get("final_url"),
                 "title": rendered.get("title"),
@@ -206,19 +204,23 @@ def run(req: AnalysisRequest, deep: bool) -> DetectorResult:
             )
 
             def _neutral():
-                return {
-                    "manipulation_probability": prob,
-                    "false_authority": fields.get("false_authority", False),
-                    "suspicious_cta": fields.get("suspicious_cta"),
-                    "fraud_destination": target.registered_domain if target else None,
-                    "explanation": "Limited assessment without LLM.",
-                }
+                if classific == "educational_content":
+                    return {"manipulation_probability": 0.10, "explanation": "Educational content.",
+                            "false_authority": False, "suspicious_cta": None, "fraud_destination": None}
+                if classific == "market_manipulation":
+                    return {"manipulation_probability": 0.70, "explanation": "Market manipulation pattern.",
+                            "false_authority": True, "suspicious_cta": "investment", "fraud_destination": target.registered_domain if target else None}
+                if classific == "spam_or_rumor":
+                    return {"manipulation_probability": 0.50, "explanation": "Unverified claims.",
+                            "false_authority": False, "suspicious_cta": None, "fraud_destination": None}
+                return {"manipulation_probability": 0.30, "explanation": "Uncertain.",
+                        "false_authority": False, "suspicious_cta": None, "fraud_destination": None}
 
             data, used_llm = reason_json(load_prompt("social_verdict.txt"), user, _neutral)
             try:
-                prob = float(data.get("manipulation_probability", prob))
+                prob = float(data.get("manipulation_probability", 0.15))
             except Exception:
-                pass
+                prob = 0.15
             prob = max(0.0, min(prob, 1.0))
 
             fields["false_authority"] = bool(data.get("false_authority", False))
@@ -230,6 +232,7 @@ def run(req: AnalysisRequest, deep: bool) -> DetectorResult:
                     source="verdict", label="Key evidence",
                     detail=str(k)[:200], weight=0.1, severity="info"))
 
+    prob = 0.15
     label = "Likely manipulation" if prob >= 0.6 else ("Suspicious" if prob >= 0.35 else "Low manipulation risk")
     return DetectorResult(
         name="social", channel=ChannelType.SOCIAL, probability=round(prob, 3),

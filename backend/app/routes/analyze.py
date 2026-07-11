@@ -12,7 +12,7 @@ from ..documents import pdf_to_text_or_image
 from ..email_parser import parse_eml
 from ..fusion import analyze
 from ..intake import build_request
-from ..llm import analyze_email_screenshot, describe_image
+from ..llm import analyze_image_vision, describe_image
 from ..log import get_logger
 from ..schemas import AnalysisResult, AnalyzeTextRequest, ChannelType, Evidence
 
@@ -126,18 +126,62 @@ async def analyze_image(
         description = f"From: {from_addr} | Subject: {subject} | Auth: {'✓' if email_auth.get('dkim_pass') else '✗'}"
         source_label = ".eml parsed with DKIM/SPF/DMARC headers"
     else:
-        vision, used_vision = await run_in_threadpool(describe_image, data, _MIME.get(ext, "image/png"))
-        if not used_vision:
-            raise HTTPException(503, _vision_unconfigured_msg(vision))
-        transcript = (vision.get("transcript") or "").strip()
-        description = (vision.get("description") or "").strip()
-        source_label = "Screenshot analyzed by vision model"
+        img_vision, used_vision = await run_in_threadpool(analyze_image_vision, data, _MIME.get(ext, "image/png"))
+        if not used_vision or not img_vision.get("body_text"):
+            vision_fallback, used_fb = await run_in_threadpool(describe_image, data, _MIME.get(ext, "image/png"))
+            if not used_fb:
+                raise HTTPException(503, _vision_unconfigured_msg(vision_fallback))
+            img_vision = {"body_text": vision_fallback.get("transcript", ""),
+                          "notes": vision_fallback.get("description", ""),
+                          "visual_manipulation_signals": [],
+                          "image_type": "unknown",
+                          "looks_like_platform": None,
+                          "urls": vision_fallback.get("urls", []),
+                          "brands_mentioned": [],
+                          "financial_claims_made": []}
+            used_vision = used_fb
+        transcript = img_vision.get("body_text", "").strip()
+        description = img_vision.get("notes", "")
+        source_label = f"Image analyzed via vision model ({img_vision.get('image_type', 'unknown')})"
 
     combined = "\n".join(p for p in [context, transcript] if p)
     if not combined.strip():
         raise HTTPException(422, "No readable text found in the file.")
 
-    req = build_request(text=combined, claimed_source=claimed_source, original_filename=file.filename)
+    source_hint = ""
+    if ext in _IMAGE_EXT:
+        img_type = img_vision.get("image_type", "unknown") if ext in _IMAGE_EXT else "unknown"
+        platform = img_vision.get("looks_like_platform") or ""
+        brands = img_vision.get("brands_mentioned", [])
+        claims = img_vision.get("financial_claims_made", [])
+        signals = img_vision.get("visual_manipulation_signals", [])
+
+        source_hint = f"SOURCE: Text extracted from an image/screenshot (type: {img_type}). "
+        if platform:
+            source_hint += f"Visual layout resembles {platform}. "
+        if brands:
+            source_hint += f"Brands visible: {', '.join(brands)}. "
+        if claims:
+            source_hint += f"Financial claims in image: {', '.join(claims)}. "
+        if signals:
+            source_hint += f"Visual manipulation signals: {', '.join(signals)}. "
+        else:
+            source_hint += "No visual manipulation signals detected. "
+    elif ext == ".pdf":
+        source_hint = "SOURCE: Text extracted from a PDF document. "
+    elif ext == ".eml":
+        source_hint = "SOURCE: Parsed from a .eml email file with authentication headers. "
+
+    req = build_request(text=source_hint + combined, claimed_source=claimed_source, original_filename=file.filename)
+
+    if ext in _IMAGE_EXT:
+        img_type = img_vision.get("image_type", "unknown") if ext in _IMAGE_EXT else "unknown"
+        if img_type == "email":
+            req.channel_type = ChannelType.EMAIL
+        else:
+            req.channel_type = ChannelType.QUERY
+    elif ext == ".eml":
+        req.channel_type = ChannelType.EMAIL
 
     if email_auth and (email_auth.get("dkim_pass") or email_auth.get("spf_pass")):
         if not req.claimed_source and eml_data.get("from_addr"):

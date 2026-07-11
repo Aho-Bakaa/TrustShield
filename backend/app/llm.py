@@ -61,7 +61,7 @@ def _call(messages: list[dict], *, use_response_format: bool) -> str:
         max_tokens=settings.llm_max_tokens,
         timeout=settings.llm_timeout_seconds,
     )
-    if _is_reasoning_model(settings.resolved_model):
+    if _is_reasoning_model(settings.resolved_model) and settings.llm_reasoning_effort:
         kwargs["reasoning_effort"] = settings.llm_reasoning_effort
     elif use_response_format:
         kwargs["response_format"] = {"type": "json_object"}
@@ -97,19 +97,28 @@ def reason_json(
         {"role": "user", "content": user},
     ]
 
-    for use_rf in (True, False):
-        try:
-            content = _call(messages, use_response_format=use_rf)
-            data = _extract_json(content)
-            if data:
-                STATS["live"] += 1
-                STATS["last_error"] = None
-                _log.info("%s live %dms (rf=%s)", settings.resolved_model, STATS["last_latency_ms"], use_rf)
-                return data, True
-        except Exception as exc:
-            STATS["last_error"] = str(exc)[:200]
-            _log.warning("LLM call failed (rf=%s): %s", use_rf, str(exc)[:120])
-            continue
+    for attempt in range(3):
+        for use_rf in (True, False):
+            try:
+                content = _call(messages, use_response_format=use_rf)
+                data = _extract_json(content)
+                if data:
+                    STATS["live"] += 1
+                    STATS["last_error"] = None
+                    _log.info("%s live %dms (rf=%s attempt=%d)", settings.resolved_model, STATS["last_latency_ms"], use_rf, attempt)
+                    return data, True
+            except Exception as exc:
+                STATS["last_error"] = str(exc)[:200]
+                err_msg = str(exc).lower()
+                if "rate" in err_msg and attempt < 2:
+                    wait = 2 ** (attempt + 1)
+                    _log.warning("rate limited, retrying in %ds (attempt %d/3)", wait, attempt + 1)
+                    import time; time.sleep(wait)
+                    continue
+                _log.warning("LLM call failed (rf=%s attempt=%d): %s", use_rf, attempt, str(exc)[:120])
+                if attempt < 2:
+                    import time; time.sleep(1)
+                    continue
 
     STATS["neutral"] += 1
     _log.warning("%s unavailable — returning neutral assessment", settings.resolved_model)
@@ -197,8 +206,8 @@ def analyze_screenshot(screenshot_b64: str) -> tuple[dict[str, Any], bool]:
         return {}, False
 
 
-def analyze_email_screenshot(image_bytes: bytes, mime: str = "image/png") -> tuple[dict[str, Any], bool]:
-    """Analyze an email screenshot — extract sender, body, URLs, layout signals."""
+def analyze_image_vision(image_bytes: bytes, mime: str = "image/png") -> tuple[dict[str, Any], bool]:
+    """Analyze any image — determines type (email, WhatsApp, social, news) and extracts content."""
     import base64
     from .prompts import load as load_prompt
 
@@ -209,11 +218,12 @@ def analyze_email_screenshot(image_bytes: bytes, mime: str = "image/png") -> tup
         content = _vision_completion(
             load_prompt("email_screenshot.txt"),
             base64.b64encode(image_bytes).decode(), mime, 1200)
-        data = _extract_json(content) or {"body_text": content.strip(), "urls": [], "notes": "JSON parse failed"}
-        _log.info("vision(email_screenshot) %dms", STATS["last_latency_ms"])
+        data = _extract_json(content) or {"body_text": content.strip(), "image_type": "unknown",
+                                          "urls": [], "notes": "JSON parse failed"}
+        _log.info("vision(image) type=%s %dms", data.get("image_type", "?"), STATS["last_latency_ms"])
         return data, True
     except Exception as exc:
-        _log.warning("email screenshot analysis failed: %s", str(exc)[:150])
+        _log.warning("image vision analysis failed: %s", str(exc)[:150])
         return {}, False
     """Ask the vision model to assess a rendered-page screenshot for brand imitation."""
     settings = get_settings()

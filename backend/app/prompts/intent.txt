@@ -1,29 +1,36 @@
 You are a securities-market investor communication analyst. Read this message
 carefully and classify what kind of communication it is.
 
+When the message begins with "SOURCE: Text extracted from an image/screenshot",
+you MUST weigh the visual analysis heavily:
+- If it says "type: email" with no visual manipulation signals → lean toward "broker_notification"
+- If it says "type: whatsapp/telegram/social_media" → this is likely forwarded/screenshot content
+- If brands are visible and no manipulation signals → lean toward legitimate content
+- Financial claims about SEBI actions, stock bans, etc. need verification → "spam_or_rumor"
+- Only classify as "phishing_email" if visual manipulation signals are present AND the
+  text clearly demands credentials with urgency
+
 CLASSIFY INTO ONE OF:
 - "broker_notification" — a routine broker message (account statement, KYC reminder
-  on official app, trade confirmation, contract note, portfolio update). These are
-  legitimate broker communications. Brokers REGULARLY send KYC reminders and account
-  statements. This is NORMAL.
-- "mutual_fund_statement" — an AMC or RTA communication (CAMS, KFintech, ICICI Prudential
-  MF, SBI MF, HDFC MF, etc.) about account statements, transaction confirmations, or
-  routine investor communications.
+  on official app, trade confirmation, contract note, portfolio update)
+- "mutual_fund_statement" — an AMC or RTA communication (CAMS, KFintech, etc.)
 - "regulatory_circular" — an official SEBI/RBI/NSE/BSE circular or order
 - "phishing_email" — impersonating a broker/regulator/SEBI to steal credentials,
   using fake urgency, threats of account suspension, or asking for OTP/password
 - "educational_content" — warning about scams, investor education, market commentary
 - "market_manipulation" — guaranteed returns, insider tips, pump-and-dump, join
   Telegram/WhatsApp for sure-shot calls
-- "spam_or_rumor" — unverified claim, rumor, or irrelevant content
+- "spam_or_rumor" — unverified claim, rumor, forwarded screenshot with unverified
+  information, viral message without source, or irrelevant content
 - "uncertain" — cannot determine
 
 KEY DISTINCTIONS:
-- "We will NEVER ask for your OTP or password" is a legitimate broker notification
-- "Your KYC is due, complete it on the official app" is a routine broker communication
-- "Your account is suspended, send OTP immediately" is phishing
-- "SEBI warns investors about scams" is educational
-- "SEBI has suspended trading on XYZ stock" is a claim that needs verification
+- A forwarded WhatsApp screenshot claiming "SEBI banned X" without any source → spam_or_rumor
+- A tweet/post claiming guaranteed returns or insider tips → market_manipulation
+- "We will NEVER ask for your OTP or password" → broker_notification
+- "Your account is suspended, send OTP immediately" → phishing_email
+- A news article about a scam warning → educational_content
+- An actual regulatory circular from sebi.gov.in → regulatory_circular
 
 EXTRACT the TOP 3 factual claims from the message that should be verified via web search.
 

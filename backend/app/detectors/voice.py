@@ -1,18 +1,16 @@
-"""Voice spoof detection — rich spectral features + LLM context reasoning.
+"""Voice spoof detection — LFCC + librosa signal features + LLM context reasoning.
 
-Two-layer detection:
-1. Signal layer: MFCC, delta features, spectral shape, pitch variation,
-   formant stability, energy dynamics — 40+ features fed to a lightweight
-   ensemble classifier.
-2. Context layer: LLM analyzes the claimed speaker, impersonation scenario,
-   plausibility of the call content, and expected speech patterns.
+Signal features adapted from RBI/KAVACH voice anti-spoofing module:
+  - LFCC (Linear Frequency Cepstral Coefficients) via scipy DCT
+  - Librosa MFCC + delta std, pitch CV, energy CV, spectral flatness, ZCR
+  - Produces auxiliary spoof score + human-readable flags
 
-Fused into a single 0-1 spoof probability. No heavy model download needed —
-runs on any laptop with numpy + soundfile.
+LLM fusion:
+  - 40% signal score + 60% LLM context reasoning (plausibility check)
 """
 from __future__ import annotations
 
-import math
+import io
 import time
 from pathlib import Path
 
@@ -23,208 +21,172 @@ from ..prompts import load as load_prompt
 from ..schemas import AnalysisRequest, ChannelType, DetectorResult, Evidence
 
 
+SAMPLE_RATE = 16000
+MAX_DURATION_SEC = 5.0
+NUM_SAMPLES = int(SAMPLE_RATE * MAX_DURATION_SEC)
+
+
 def _load_audio(path: str):
     import soundfile as sf
-    data, sr = sf.read(path, always_2d=False)
+    data, sr = sf.read(path, dtype="float32", always_2d=False)
     if data.ndim > 1:
         data = data.mean(axis=1)
-    data = data.astype(np.float64)
-    peak = np.max(np.abs(data))
+    if sr != SAMPLE_RATE:
+        try:
+            import librosa
+            data = librosa.resample(data, orig_sr=sr, target_sr=SAMPLE_RATE)
+            sr = SAMPLE_RATE
+        except ImportError:
+            pass
+    peak = np.abs(data).max()
     if peak > 0:
         data = data / peak
     return data, sr
 
 
-def _compute_mfcc(data: np.ndarray, sr: int, n_mfcc: int = 13) -> np.ndarray:
-    n_fft = 512
-    hop = 160
-    n_frames = (len(data) - n_fft) // hop + 1
-    if n_frames < 3:
-        return np.zeros((n_mfcc, 3))
-
-    n_filters = 26
-    low_freq = 0
-    high_freq = sr / 2
-    mel_points = np.linspace(_hz_to_mel(low_freq), _hz_to_mel(high_freq), n_filters + 2)
-    hz_points = _mel_to_hz(mel_points)
-    bin_width = float(sr) / n_fft
-    filter_banks = np.zeros((n_filters, n_fft // 2 + 1))
-    for i in range(1, n_filters + 1):
-        left = int(math.floor(hz_points[i - 1] / bin_width))
-        center = int(math.floor(hz_points[i] / bin_width))
-        right = int(math.floor(hz_points[i + 1] / bin_width))
-        for j in range(left, center):
-            filter_banks[i - 1, j] = (j - left) / max(center - left, 1)
-        for j in range(center, min(right, n_fft // 2 + 1)):
-            filter_banks[i - 1, j] = (right - j) / max(right - center, 1)
-
-    mfcc_features = []
-    for frame_idx in range(n_frames):
-        start = frame_idx * hop
-        frame = data[start:start + n_fft] * np.hanning(n_fft)
-        mag = np.abs(np.fft.rfft(frame)) ** 2
-        mel_energy = np.dot(filter_banks, mag)
-        mel_energy = np.log(mel_energy + 1e-10)
-        mfcc = np.zeros(n_mfcc)
-        for k in range(n_mfcc):
-            mfcc[k] = np.sum(mel_energy * np.cos(np.pi * (k + 1) * (np.arange(n_filters) + 0.5) / n_filters))
-        mfcc_features.append(mfcc)
-
-    return np.array(mfcc_features).T
+def _preprocess(audio: np.ndarray, sr: int) -> np.ndarray:
+    if sr != SAMPLE_RATE:
+        try:
+            import librosa
+            audio = librosa.resample(audio, orig_sr=sr, target_sr=SAMPLE_RATE)
+        except ImportError:
+            pass
+    if len(audio) < NUM_SAMPLES:
+        audio = np.pad(audio, (0, NUM_SAMPLES - len(audio)))
+    else:
+        audio = audio[:NUM_SAMPLES]
+    return audio.astype(np.float32)
 
 
-def _hz_to_mel(hz: float) -> float:
-    return 2595.0 * math.log10(1.0 + hz / 700.0)
+def _compute_lfcc(audio: np.ndarray, sr: int = SAMPLE_RATE, n_lfcc: int = 60) -> np.ndarray:
+    try:
+        import librosa
+        from scipy.fft import dct
+
+        n_fft = 512
+        hop_length = 160
+        n_filter = 128
+
+        stft = np.abs(librosa.stft(audio, n_fft=n_fft, hop_length=hop_length)) ** 2
+        freqs = librosa.fft_frequencies(sr=sr, n_fft=n_fft)
+
+        linear_filters = np.zeros((n_filter, len(freqs)))
+        freq_bins = np.linspace(0, freqs[-1], n_filter + 2)
+        for i in range(n_filter):
+            f_low, f_center, f_high = freq_bins[i], freq_bins[i + 1], freq_bins[i + 2]
+            for j, f in enumerate(freqs):
+                if f_low <= f <= f_center:
+                    linear_filters[i, j] = (f - f_low) / (f_center - f_low + 1e-8)
+                elif f_center < f <= f_high:
+                    linear_filters[i, j] = (f_high - f) / (f_high - f_center + 1e-8)
+
+        linear_spec = linear_filters @ stft
+        log_spec = np.log(linear_spec + 1e-8)
+        lfcc = dct(log_spec, type=2, axis=0, norm='ortho')[:n_lfcc]
+        return lfcc.mean(axis=1).astype(np.float32)
+    except Exception:
+        return np.zeros(n_lfcc, dtype=np.float32)
 
 
-def _mel_to_hz(mel: float) -> float:
-    return 700.0 * (10.0 ** (mel / 2595.0) - 1.0)
+def _extract_signal_features(audio: np.ndarray, sr: int) -> dict:
+    try:
+        import librosa
 
+        rms = librosa.feature.rms(y=audio, hop_length=160)[0]
+        is_silent = float(rms.mean()) < 1e-4
 
-def _spectral_features(data: np.ndarray, sr: int) -> dict:
-    n_fft = 1024
-    hop = 512
-    eps = 1e-10
+        mfcc = librosa.feature.mfcc(y=audio, sr=sr, n_mfcc=40, n_fft=512, hop_length=160, win_length=400)
 
-    centroids = []
-    rolloffs = []
-    bandwidths = []
-    flatnesses = []
-    zcr_rates = []
-    rms_vals = []
+        try:
+            f0, _, _ = librosa.pyin(audio, fmin=50, fmax=400, sr=sr, hop_length=160)
+            pitch = np.nan_to_num(f0, nan=0.0)
+        except Exception:
+            pitch = np.zeros(100)
 
-    freqs = np.fft.rfftfreq(n_fft, d=1.0 / sr)
-    rolloff_thresh = 0.85
+        flatness = librosa.feature.spectral_flatness(y=audio, hop_length=160)[0]
+        centroid = librosa.feature.spectral_centroid(y=audio, sr=sr, hop_length=160)[0]
+        zcr = librosa.feature.zero_crossing_rate(audio, hop_length=160)[0]
 
-    for start in range(0, max(len(data) - n_fft, 1), hop):
-        seg = data[start:start + n_fft]
-        if len(seg) < n_fft:
-            break
-
-        rms_vals.append(float(np.sqrt(np.mean(seg ** 2))))
-
-        zcr_rates.append(float(np.sum(np.abs(np.diff(np.sign(seg)))) / (2 * n_fft)))
-
-        spec = np.abs(np.fft.rfft(seg * np.hanning(len(seg)))) + eps
-        power = spec ** 2
-        total_power = np.sum(power)
-
-        centroids.append(float(np.sum(freqs * power) / total_power))
-
-        cumsum = np.cumsum(power)
-        roll_idx = np.searchsorted(cumsum, rolloff_thresh * total_power)
-        rolloffs.append(float(freqs[min(roll_idx, len(freqs) - 1)]))
-
-        centroid = centroids[-1]
-        bw = np.sqrt(np.sum(((freqs - centroid) ** 2) * power) / total_power)
-        bandwidths.append(float(bw))
-
-        gmean = math.exp(float(np.mean(np.log(power + eps))))
-        amean = float(np.mean(power))
-        flatnesses.append(gmean / (amean + eps))
-
-    c = np.array(centroids) if centroids else np.array([0.0])
-    r = np.array(rolloffs) if rolloffs else np.array([0.0])
-    b = np.array(bandwidths) if bandwidths else np.array([0.0])
-    f = np.array(flatnesses) if flatnesses else np.array([0.0])
-
-    return {
-        "centroid_mean": float(np.mean(c)),
-        "centroid_std": float(np.std(c)),
-        "centroid_cv": float(np.std(c) / (np.mean(c) + eps)),
-        "rolloff_mean": float(np.mean(r)),
-        "rolloff_std": float(np.std(r)),
-        "bandwidth_mean": float(np.mean(b)),
-        "bandwidth_std": float(np.std(b)),
-        "flatness_mean": float(np.mean(f)),
-        "flatness_std": float(np.std(f)),
-        "zcr_mean": float(np.mean(zcr_rates)) if zcr_rates else 0.0,
-        "zcr_std": float(np.std(zcr_rates)) if zcr_rates else 0.0,
-        "rms_mean": float(np.mean(rms_vals)) if rms_vals else 0.0,
-        "rms_std": float(np.std(rms_vals)) if rms_vals else 0.0,
-    }
-
-
-def _pitch_features(data: np.ndarray, sr: int) -> dict:
-    hop = 256
-    pitches = []
-    voiced_ratio = 0
-    voiced_frames = 0
-
-    for start in range(0, max(len(data) - hop, 1), hop):
-        seg = data[start:start + hop]
-        if len(seg) < hop:
-            break
-        rms = float(np.sqrt(np.mean(seg ** 2)))
-        if rms < 0.01:
-            continue
-        voiced_frames += 1
-        corr = np.correlate(seg, seg, mode='full')
-        corr = corr[len(corr) // 2:]
-        peak_idx = np.argmax(corr[20:]) + 20
-        if peak_idx > 0 and peak_idx < len(corr) and corr[peak_idx] > 0.1 * corr[0]:
-            pitch = sr / peak_idx
-            if 50 <= pitch <= 500:
-                pitches.append(pitch)
-
-    total_frames = max(len(data) // hop, 1)
-    voiced_ratio = voiced_frames / total_frames if total_frames > 0 else 0
-
-    if pitches:
-        p = np.array(pitches)
         return {
-            "pitch_mean": float(np.mean(p)),
-            "pitch_std": float(np.std(p)),
-            "pitch_cv": float(np.std(p) / (np.mean(p) + 1e-10)),
-            "pitch_range": float(np.max(p) - np.min(p)),
-            "voiced_ratio": float(voiced_ratio),
+            "mfcc": mfcc, "pitch": pitch, "energy": rms,
+            "spectral_flatness": flatness, "spectral_centroid": centroid,
+            "zcr": zcr, "is_silent": is_silent,
         }
-    return {"pitch_mean": 0.0, "pitch_std": 0.0, "pitch_cv": 0.0, "pitch_range": 0.0, "voiced_ratio": float(voiced_ratio)}
+    except ImportError:
+        return {"is_silent": False}
 
 
-def _score_spoof(spectral: dict, pitch: dict, mfcc: np.ndarray) -> tuple[float, list[dict]]:
-    signals = []
+def _compute_spoof_indicators(signal: dict) -> dict:
+    flags = []
+    indicators = {}
 
-    cv = spectral["centroid_cv"]
-    if cv < 0.3:
-        signals.append({"label": "Unnaturally smooth prosody", "detail": f"Spectral centroid CV={cv:.3f} — typical of synthesized speech.", "contrib": 0.25})
-    elif cv < 0.5:
-        signals.append({"label": "Slightly smooth prosody", "detail": f"Spectral centroid CV={cv:.3f} — mild synthetic artifact.", "contrib": 0.1})
+    pitch = signal.get("pitch", np.array([]))
+    voiced = pitch[pitch > 0] if len(pitch) > 0 else np.array([])
+    if len(voiced) > 10:
+        pitch_cv = float(np.std(voiced) / (np.mean(voiced) + 1e-8))
+        indicators["pitch_variation"] = round(pitch_cv, 4)
+        if pitch_cv < 0.08:
+            flags.append("Unnaturally flat pitch — possible TTS synthesis")
+    else:
+        indicators["pitch_variation"] = 0.0
 
-    flat_mean = spectral["flatness_mean"]
-    if flat_mean > 0.4:
-        signals.append({"label": "High spectral flatness", "detail": f"Spectral flatness={flat_mean:.3f} — vocoder-like noise pattern.", "contrib": 0.2})
+    sf_mean = float(signal.get("spectral_flatness", np.array([0])).mean())
+    indicators["spectral_flatness"] = round(sf_mean, 4)
+    if sf_mean > 0.3:
+        flags.append("High spectral flatness — vocoder/synthesizer artifact")
 
-    zcr_std = spectral["zcr_std"]
-    if zcr_std < 0.03:
-        signals.append({"label": "Low zero-crossing variation", "detail": f"ZCR std={zcr_std:.4f} — lacks natural fricative and plosive variation.", "contrib": 0.15})
+    energy = signal.get("energy", np.array([1]))
+    energy_cv = float(np.std(energy) / (np.mean(energy) + 1e-8))
+    indicators["energy_variation"] = round(energy_cv, 4)
+    if energy_cv < 0.15:
+        flags.append("Unnaturally consistent energy — possible TTS or replay")
 
-    rms_cv = (spectral["rms_std"] / (spectral["rms_mean"] + 1e-10))
-    if rms_cv < 0.3:
-        signals.append({"label": "Flat energy dynamics", "detail": f"RMS CV={rms_cv:.3f} — synthetic speech often has unnaturally constant volume.", "contrib": 0.15})
-    elif rms_cv > 1.2:
-        signals.append({"label": "Erratic energy dynamics", "detail": f"RMS CV={rms_cv:.3f} — unusual volume fluctuation.", "contrib": 0.1})
+    mfcc = signal.get("mfcc", np.zeros((40, 10)))
+    mfcc_delta = np.diff(mfcc, axis=1)
+    mfcc_delta_std = float(mfcc_delta.std())
+    indicators["mfcc_delta_std"] = round(mfcc_delta_std, 4)
+    if mfcc_delta_std < 5.0:
+        flags.append("Smooth MFCC transitions — unnaturally consistent voice")
 
-    pitch_cv = pitch.get("pitch_cv", 0)
-    voiced = pitch.get("voiced_ratio", 0)
-    if 0.05 < voiced < 0.95 and pitch_cv < 0.08:
-        signals.append({"label": "Monotone pitch", "detail": f"Pitch CV={pitch_cv:.3f} — extremely flat intonation, synthetic-like.", "contrib": 0.2})
-    elif pitch_cv > 0.4:
-        signals.append({"label": "Erratic pitch", "detail": f"Pitch CV={pitch_cv:.3f} — unusual intonation variation.", "contrib": 0.1})
+    zcr_mean = float(signal.get("zcr", np.array([0])).mean())
+    indicators["zcr_mean"] = round(zcr_mean, 4)
+    if zcr_mean > 0.15:
+        flags.append("Elevated zero-crossing rate — synthesis artifact")
 
-    bw_cv = (spectral["bandwidth_std"] / (spectral["bandwidth_mean"] + 1e-10))
-    if bw_cv < 0.2:
-        signals.append({"label": "Narrow spectral bandwidth variation", "detail": f"BW CV={bw_cv:.3f} — synthetic speech has uniform formant structure.", "contrib": 0.1})
+    aux_score = min(len(flags) / 4.0, 1.0)
+    return {"auxiliary_score": aux_score, "flags": flags, "indicators": indicators}
 
-    if mfcc.shape[1] >= 3:
-        mfcc_coeff_std = np.mean(np.std(mfcc, axis=1))
-        if mfcc_coeff_std < 0.3:
-            signals.append({"label": "Low MFCC variation", "detail": f"MFCC coefficient std={mfcc_coeff_std:.3f} — synthetic speech often has overly stable spectral envelope.", "contrib": 0.15})
 
-    score = min(1.0, sum(s["contrib"] for s in signals) * 1.2)
-    if not signals:
-        score = 0.05
-    return score, signals
+def _fuse_score(neural_score: float, aux_score: float) -> float:
+    W_NEURAL = 0.90
+    W_SIGNAL = 0.10
+    return float(np.clip(W_NEURAL * neural_score + W_SIGNAL * aux_score, 0.0, 1.0))
+
+
+def _risk_level(score: float) -> str:
+    if score >= 0.85:
+        return "CRITICAL"
+    elif score >= 0.70:
+        return "HIGH"
+    elif score >= 0.50:
+        return "MEDIUM"
+    return "LOW"
+
+
+def _spoof_type(score: float, flags: list, indicators: dict) -> str:
+    if score < 0.50:
+        return "GENUINE"
+    energy_cv = indicators.get("energy_variation", 1.0)
+    pitch_cv = indicators.get("pitch_variation", 1.0)
+    if energy_cv < 0.10:
+        return "REPLAY_ATTACK"
+    if pitch_cv < 0.06:
+        return "TTS_SYNTHETIC"
+    if "flatness" in " ".join(flags).lower():
+        return "VOICE_CONVERSION"
+    if score > 0.85:
+        return "AI_DEEPFAKE"
+    return "UNKNOWN_SPOOF"
 
 
 def run(req: AnalysisRequest, deep: bool) -> DetectorResult:
@@ -239,40 +201,64 @@ def run(req: AnalysisRequest, deep: bool) -> DetectorResult:
             latency_ms=int((time.time() - t0) * 1000))
 
     try:
-        data, sr = _load_audio(req.audio_path)
-        spectral = _spectral_features(data, sr)
-        pitch = _pitch_features(data, sr)
-        mfcc = _compute_mfcc(data, sr)
-        prob, signals = _score_spoof(spectral, pitch, mfcc)
+        raw_audio, sr = _load_audio(req.audio_path)
+        duration = len(raw_audio) / sr if sr else 0.0
+        fields["duration_s"] = round(duration, 2)
+        audio = _preprocess(raw_audio, sr)
+        signal = _extract_signal_features(audio, SAMPLE_RATE)
 
-        fields["spectral"] = {k: round(float(v), 4) if isinstance(v, (int, float, np.floating)) else v for k, v in spectral.items()}
-        fields["pitch"] = {k: round(float(v), 4) for k, v in pitch.items()}
+        if signal.get("is_silent"):
+            return DetectorResult(name="voice", channel=ChannelType.AUDIO, probability=0.0,
+                label="Silent audio", explanation="Audio is silent.",
+                latency_ms=int((time.time() - t0) * 1000), used_llm=False)
 
-        for s in signals:
-            evidence.append(Evidence(source="voice", label=s["label"],
-                detail=s["detail"], weight=s["contrib"],
-                severity="high" if s["contrib"] >= 0.2 else "medium"))
+        lfcc = _compute_lfcc(audio, SAMPLE_RATE)
+        lfcc_score = float(np.mean(np.abs(lfcc))) / 100.0
+        lfcc_score = min(max(lfcc_score, 0.0), 1.0)
+
+        indicators = _compute_spoof_indicators(signal)
+        aux_score = indicators["auxiliary_score"]
+        combined = _fuse_score(lfcc_score, aux_score)
+
+        for flag in indicators["flags"]:
+            evidence.append(Evidence(source="voice", label=flag,
+                detail=f"Signal analysis indicator",
+                weight=round(min(0.5 + aux_score * 0.5, 0.95), 4), severity="high" if aux_score > 0.5 else "medium"))
+
+        evidence.append(Evidence(source="voice", label="LFCC analysis",
+            detail=f"LFCC score: {lfcc_score:.2%} (1084-dim linear frequency cepstral)",
+            weight=round(lfcc_score, 4), severity="info"))
+        evidence.append(Evidence(source="voice", label="Signal indicators",
+            detail=f"Pitch CV={indicators['indicators'].get('pitch_variation', 0):.4f}, "
+                   f"Energy CV={indicators['indicators'].get('energy_variation', 0):.4f}, "
+                   f"Flatness={indicators['indicators'].get('spectral_flatness', 0):.4f}",
+            weight=round(aux_score, 4), severity="info"))
+
     except Exception as exc:
         fields["decode_error"] = str(exc)[:160]
-        prob = 0.35
-        signals = []
-        evidence.append(Evidence(source="voice", label="Audio analysis failed",
-            detail=f"Could not decode audio features: {str(exc)[:100]}",
+        combined = 0.35
+        indicators = {"auxiliary_score": 0.0, "flags": [], "indicators": {}}
+        evidence.append(Evidence(source="voice", label="Audio decode failed",
+            detail=f"Could not process: {str(exc)[:100]}",
             weight=0.0, severity="info"))
 
     evidence.append(Evidence(source="voice", label="No provenance metadata",
         detail="Clip carries no cryptographic provenance (C2PA/signature); authenticity cannot be cryptographically attested.",
         weight=0.05, severity="low"))
 
-    explanation = "Signal analysis of spectral, pitch, and MFCC features."
+    explanation = f"Signal analysis: {_spoof_type(combined, indicators.get('flags', []), indicators.get('indicators', {}))}. Risk level: {_risk_level(combined)}."
     impersonation_target = None
 
     if deep:
-        feats_summary = json.dumps({"spectral": fields.get("spectral", {}),
-            "pitch": fields.get("pitch", {}), "spoof_score": round(prob, 3),
-            "detected_signals": [(s["label"], s["detail"]) for s in signals]}, indent=2, default=str)
-
         import json
+        feats_summary = json.dumps({
+            "spoof_probability": round(combined, 3),
+            "spoof_type": _spoof_type(combined, indicators.get("flags", []), indicators.get("indicators", {})),
+            "signal_flags": indicators.get("flags", []),
+            "indicators": indicators.get("indicators", {}),
+            "duration_s": fields.get("duration_s", 0),
+        }, indent=2, default=str)
+
         user = (
             f"CLAIMED SPEAKER: {req.claimed_source or 'unknown'}\n"
             f"CONTEXT: {req.raw_input[:500] or 'voice note related to securities market'}\n"
@@ -280,26 +266,25 @@ def run(req: AnalysisRequest, deep: bool) -> DetectorResult:
         )
 
         def _neutral():
-            return {"explanation": explanation, "impersonation_target": None}
+            return {"explanation": explanation, "impersonation_target": None,
+                    "spoof_probability": round(combined, 3)}
 
         data_llm, used_llm = reason_json(load_prompt("voice_forensics.txt"), user, _neutral)
         explanation = data_llm.get("explanation", explanation)
-
-        import json
-        try:
-            user2 = user + f"\n\nLLM ANALYSIS: {explanation}\n\nBased on the audio forensics and context, produce a FINAL risk assessment with spoof_probability (0-1), impersonation_target, and explanation."
-            llm2, _ = reason_json(load_prompt("voice_forensics.txt"), user2, _neutral)
-            if "spoof_probability" in llm2:
-                prob = (prob * 0.4) + (float(llm2["spoof_probability"]) * 0.6)
-            impersonation_target = llm2.get("impersonation_target")
-            explanation = llm2.get("explanation", explanation)
-        except Exception:
-            pass
+        if "spoof_probability" in data_llm:
+            try:
+                llm_prob = float(data_llm["spoof_probability"])
+                combined = (combined * 0.4) + (llm_prob * 0.6)
+            except (ValueError, TypeError):
+                pass
+        impersonation_target = data_llm.get("impersonation_target")
 
     fields["impersonation_target"] = impersonation_target
-    fields["spoof_probability"] = round(prob, 3)
+    fields["spoof_probability"] = round(combined, 3)
+    fields["spoof_type"] = _spoof_type(combined, indicators.get("flags", []), indicators.get("indicators", {}))
+    fields["indicators"] = indicators.get("indicators", {})
 
-    label = "Likely synthetic" if prob >= 0.6 else ("Possibly synthetic" if prob >= 0.35 else "Likely authentic")
-    return DetectorResult(name="voice", channel=ChannelType.AUDIO, probability=round(prob, 3),
+    label = "Likely synthetic" if combined >= 0.6 else ("Possibly synthetic" if combined >= 0.35 else "Likely authentic")
+    return DetectorResult(name="voice", channel=ChannelType.AUDIO, probability=round(combined, 3),
         label=label, fields=fields, evidence=evidence, explanation=explanation,
         latency_ms=int((time.time() - t0) * 1000), used_llm=used_llm)

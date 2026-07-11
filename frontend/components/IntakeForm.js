@@ -61,7 +61,7 @@ export default function IntakeForm({ onStart, onResult, onError }) {
     }
   }
 
-  // Paste a screenshot from the clipboard anywhere -> auto-analyze.
+  // Paste a screenshot from the clipboard -> show it for review (don't auto-analyze).
   useEffect(() => {
     function onPaste(e) {
       const items = e.clipboardData?.items || [];
@@ -73,7 +73,6 @@ export default function IntakeForm({ onStart, onResult, onError }) {
             const f = new File([blob], `pasted.${ext}`, { type: blob.type });
             setMode("image");
             setFile(f);
-            runAnalyze({ mode: "image", file: f });
             e.preventDefault();
           }
           return;

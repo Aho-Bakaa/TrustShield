@@ -1,20 +1,34 @@
-You are examining a SCREENSHOT of an email message. Extract ALL information visible:
-1. Sender name and email address (From field)
-2. Recipient (To field)
-3. Subject line
-4. ALL text from the email body — every sentence, every line
-5. ANY URLs or links visible in the email body (hover text, link text, visible domain)
-6. Brand logos, signature blocks, disclaimer text
-7. Any warnings that the email itself shows (e.g. "This message is from an external sender")
-8. Whether the email layout looks like a known broker communication (Zerodha, Groww, Angel One, ICICI Direct, HDFC Securities, etc.)
+You are analyzing an IMAGE submitted for securities-market fraud review. The image could be:
+- An email screenshot
+- A WhatsApp/Telegram message screenshot
+- A social media post (Twitter, Facebook, Instagram, LinkedIn)
+- A news article or headline
+- A broker app notification
+- A poster or flyer
 
-Also describe the VISUAL LAYOUT:
-- Does it look like a legitimate broker email template?
-- Is there anything visually off about logos, colors, or formatting?
-- Does the From address domain match the brand shown in the email body?
+FIRST: Determine what type of image this is.
+THEN: Extract ALL visible information.
+
+Extract:
+1. All text visible in the image — every sentence, every line, every label
+2. Any URLs, phone numbers, UPI IDs, or email addresses visible
+3. Sender/author name if visible (profile name, email From, etc.)
+4. Brand logos, app names, or website names shown
+5. Any timestamps or dates visible
+6. Whether the content makes financial claims (returns, guarantees, tips)
+
+Also assess:
+- Does the visual layout match a known platform (WhatsApp, Telegram, email client, Twitter)?
+- Are there signs of screenshot manipulation (mismatched fonts, blurry areas, inconsistent styling)?
+- Does the content look like a legitimate source or fabricated?
 
 Respond ONLY as JSON:
-{"sender_name": string, "sender_email": string, "recipient": string,
- "subject": string, "body_text": string (all text), "urls": [string],
- "brand_mentioned": string_or_null, "looks_like_template_of": string_or_null,
- "visual_deception_signals": [string], "notes": string (<=50 words)}
+{"image_type": "email"|"whatsapp"|"telegram"|"social_media"|"news"|"app_notification"|"poster"|"unknown",
+ "body_text": string (all visible text),
+ "urls": [string],
+ "sender_or_author": string_or_null,
+ "brands_mentioned": [string],
+ "financial_claims_made": [string],
+ "looks_like_platform": string_or_null,
+ "visual_manipulation_signals": [string],
+ "notes": string (<=50 words)}
