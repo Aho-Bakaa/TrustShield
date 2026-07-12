@@ -27,7 +27,9 @@ from ..schemas import AnalysisRequest, ChannelType, DetectorResult, Evidence
 _log = get_logger("phishing")
 
 _OFFICIAL_DOMAINS = {"sebi.gov.in", "rbi.org.in", "nseindia.com", "bseindia.com",
-                     "scores.sebi.gov.in", "nsdl.co.in", "cdslindia.com", "amfiindia.com"}
+                     "scores.sebi.gov.in", "nsdl.co.in", "cdslindia.com", "amfiindia.com",
+                     "camsonline.com", "mycams.camsonline.com", "amfi.camsonline.com",
+                     "kfintech.com", "nsdlcas.nsdl.com"}
 
 _CSRF_FIELD = re.compile(r"_csrf|csrf_token|csrfmiddleware|__RequestVerification|xsrf|anticsrf", re.I) if False else None
 
@@ -201,11 +203,12 @@ def run(req: AnalysisRequest, deep: bool) -> DetectorResult:
                     "key_evidence": ["Phishing email pattern detected."],
                     "explanation": "Email with phishing characteristics.",
                     "recommended_action": "report"}
-        if classific in ("broker_notification", "mutual_fund_statement", "educational_content"):
-            return {"threat_probability": 0.10, "input_type": channel,
+        if classific in ("broker_notification", "mutual_fund_statement", "educational_content", "regulatory_circular"):
+            return {"threat_probability": 0.07, "input_type": channel,
                     "impersonated_entity": impersonated,
                     "domain_mismatch": False, "credential_capture": False,
-                    "key_evidence": [], "explanation": "Legitimate communication pattern.",
+                    "key_evidence": [],
+                    "explanation": "Legitimate communication pattern — dead links on legitimate emails are not phishing.",
                     "recommended_action": "ignore"}
         if classific == "spam_or_rumor":
             if channel in ("query", "image"):

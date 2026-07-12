@@ -21,7 +21,7 @@ def test_claimed_official_but_offdomain_not_verified():
     )
     a = assess(req)
     assert a.is_official_source is False
-    assert a.official_confidence <= 0.1
+    assert a.official_confidence <= 0.20
     assert any("NOT verified" in s for s in a.signals)
 
 

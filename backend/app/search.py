@@ -1,6 +1,6 @@
 """Web search engine for claim verification.
 
-Uses DuckDuckGo Lite (HTML table layout) for reliable, no-API-key search.
+Uses DuckDuckGo Lite (GET request) for reliable, no-API-key search.
 
 Classification:
 - verified: official source or ≥2 reputable sources confirm the claim
@@ -23,22 +23,23 @@ from .log import get_logger
 _log = get_logger("search")
 
 _OFFICIAL = {"sebi.gov.in", "rbi.org.in", "nseindia.com", "bseindia.com",
-             "scores.sebi.gov.in", "nsdl.co.in", "cdslindia.com", "amfiindia.com"}
+             "scores.sebi.gov.in", "nsdl.co.in", "cdslindia.com", "amfiindia.com",
+             "camsonline.com", "mycams.camsonline.com", "amfi.camsonline.com",
+             "kfintech.com", "nsdlcas.nsdl.com"}
 _NEWS = {"moneycontrol.com", "economictimes.indiatimes.com", "livemint.com",
          "bloombergquint.com", "businesstoday.in", "thehindubusinessline.com",
          "cnbctv18.com", "ndtvprofit.com"}
 
 _UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
-
 _DENIAL_RE = re.compile(r"denied|refuted|fake|false|hoax|not issued|did not issue|no such|fraudulent|scam", re.I)
 
 
 def _search_ddg(query: str, timeout: float = 8.0) -> list[dict[str, Any]]:
-    """Search via DuckDuckGo Lite (HTML table layout, no JS needed)."""
-    url = "https://lite.duckduckgo.com/lite/"
+    """Search via DuckDuckGo Lite (GET request works, POST gets blocked)."""
+    url = f"https://lite.duckduckgo.com/lite/?q={quote_plus(query[:120])}"
     try:
         with httpx.Client(headers={"User-Agent": _UA}, timeout=timeout, follow_redirects=True) as client:
-            resp = client.post(url, data={"q": query[:120]})
+            resp = client.get(url)
             if resp.status_code != 200:
                 return []
     except Exception as exc:
@@ -48,11 +49,12 @@ def _search_ddg(query: str, timeout: float = 8.0) -> list[dict[str, Any]]:
     soup = BeautifulSoup(resp.text, "html.parser")
     tds = soup.select("td")
     results = []
+    compiled_num = re.compile(r"^\d+\.$")
 
     i = 0
     while i < len(tds) - 6:
         text = tds[i].get_text(strip=True)
-        if re.match(r"^\d+\.$", text):
+        if compiled_num.match(text):
             title_td = tds[i + 1]
             snippet_td = tds[i + 3]
             url_td = tds[i + 5]

@@ -55,12 +55,23 @@ def assess(req: AnalysisRequest) -> AuthenticityResult:
     elif allowlisted and suspicious:
         confidence = 0.35
         signals.append("Message mixes official and non-official links — treat with caution")
+    elif claimed_official and suspicious and not req.links:
+        confidence = 0.30
+        signals.append(f"References {claimed_official} but has no verifiable official link")
     elif claimed_official and suspicious:
-        confidence = 0.05
-        signals.append(
-            f"Claims to be from {claimed_official} but links to non-official domain "
-            f"{suspicious[0].registered_domain} — authenticity NOT verified"
-        )
+        if any(l.registered_domain in ("bit.ly", "t.co", "short.url", "rb.gy")
+               for l in suspicious):
+            confidence = 0.45
+            signals.append(
+                f"Claims to be from {claimed_official} — links use URL shorteners. "
+                "Shortened links alone are not phishing signals."
+            )
+        else:
+            confidence = 0.15
+            signals.append(
+                f"Claims to be from {claimed_official} but links to non-official domain "
+                f"{suspicious[0].registered_domain} — authenticity NOT verified"
+            )
     elif claimed_official and not req.links:
         confidence = 0.3
         signals.append(f"References {claimed_official} but has no verifiable official link")

@@ -34,13 +34,14 @@ MUST be below 0.15. Official government sites are NOT threats.
 
 SCORING BY INPUT TYPE:
 
-EMAIL (phishing_probability):
+EMAIL (threat_probability):
+- Intent = broker_notification or mutual_fund_statement → 0.05-0.15
+  Even if links are dead/404 — expired short links on legitimate emails are NOT phishing.
 - Official domain with matching content → 0.05-0.15
-- Legitimate broker communication → 0.05-0.15
 - Email with credential request on suspicious domain → 0.75-0.95
 - Email with link to non-official domain requesting KYC/OTP → 0.70-0.90
 
-URL (phishing_probability):
+URL (threat_probability):
 - Official domain → 0.05-0.15
 - Login form on non-official domain → 0.70-0.90
 - Redirect chain to suspicious domain → 0.65-0.85
@@ -50,13 +51,11 @@ QUERY (threat_probability):
 - Claims contradicted by official sources → 0.70-0.95 (MISINFORMATION)
 - Claims not_found but alarming (fraud, ban, crackdown) → 0.40-0.65 (UNVERIFIED)
 - No claims, just information about scams → 0.05-0.15
-- Educational content warning about scams → 0.05-0.10
 
 IMAGE (threat_probability):
 - Official document on allowlisted domain → 0.05-0.15
 - Fake news with contradicted claims → 0.60-0.85
 - Scam screenshot with credential request → 0.70-0.90
-- Unverified claims in image → 0.40-0.65
 
 FIRST RESPONSE — always include search_queries AND input_type:
 {"search_queries": ["specific query 1", "specific query 2"], "input_type": "email|url|query|image"}

@@ -35,30 +35,6 @@ function VerdictHeader({ result }) {
   );
 }
 
-function SearchResults({ evidence }) {
-  const searchItems = evidence?.filter(e => e.source === "search") || [];
-  if (!searchItems.length) return null;
-
-  return (
-    <div className="rounded-2xl border border-slate-200 bg-white p-6">
-      <h3 className="mb-3 text-xs font-bold uppercase tracking-wider text-slate-500">Web Verification Results</h3>
-      <div className="space-y-2">
-        {searchItems.map((e, i) => (
-          <div key={i} className={`flex items-start gap-3 rounded-lg p-3 text-xs ${e.severity === "high" ? "bg-rose-50 border border-rose-100" : e.severity === "info" ? "bg-emerald-50 border border-emerald-100" : "bg-slate-50 border border-slate-200"}`}>
-            <span className="mt-0.5 shrink-0">
-              {e.severity === "high" ? "❌" : e.severity === "info" ? "✅" : "🔍"}
-            </span>
-            <div>
-              <div className="font-semibold text-slate-800">{e.label}</div>
-              <div className="mt-0.5 text-slate-500 leading-relaxed">{e.detail}</div>
-            </div>
-          </div>
-        ))}
-      </div>
-    </div>
-  );
-}
-
 export default function Scanner() {
   const [result, setResult] = useState(null);
   const [loading, setLoading] = useState(false);
@@ -125,19 +101,7 @@ export default function Scanner() {
           <>
             <VerdictHeader result={result} />
 
-            <SearchResults evidence={result.evidence} />
-
-            {isQuery && (
-              <div className="rounded-2xl border border-slate-200 bg-white p-6">
-                <h3 className="mb-3 text-xs font-bold uppercase tracking-wider text-slate-500">Search Queries Used</h3>
-                <div className="space-y-1 text-xs font-mono text-slate-600">
-                  {result.evidence?.filter(e => e.source === "search").map((e, i) => (
-                    <div key={i} className="rounded bg-slate-50 px-3 py-1.5">{e.label}</div>
-                  ))}
-                </div>
-                <p className="mt-3 text-[11px] text-slate-400">These queries were searched against SEBI, RBI, NSE, BSE, and major financial news outlets.</p>
-              </div>
-            )}
+            <EvidenceList evidence={result.evidence?.filter(e => e.source !== "search") || []} />
 
             {hasLinks && (
               <div className="rounded-2xl border border-slate-200 bg-white p-6">
@@ -153,12 +117,6 @@ export default function Scanner() {
                 </div>
               </div>
             )}
-
-            {!isQuery && !isRendered && !hasLinks && (
-              <EvidenceList evidence={result.evidence?.filter(e => e.source !== "search") || []} />
-            )}
-
-            {isRendered && <EvidenceList evidence={result.evidence?.filter(e => e.source !== "search") || []} />}
 
             {hasEntities && (
               <div className="rounded-2xl border border-slate-200 bg-white p-6">
