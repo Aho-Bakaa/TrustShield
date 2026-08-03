@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>TrustShield</title>
+  <style>
+    body { font-family: system-ui, sans-serif; margin: 0; width: 320px; background: #f8fafc; }
+    header { display: flex; align-items: center; gap: 8px; padding: 12px 14px; background: #0f4c81; color: #fff; }
+    header h1 { font-size: 14px; margin: 0; }
+    #content { padding: 14px; }
+    .chip { display: inline-block; padding: 2px 8px; border-radius: 6px; font-size: 11px; font-weight: 700; text-transform: uppercase; }
+    .chip.low { background: #d1fae5; color: #065f46; }
+    .chip.medium { background: #fef3c7; color: #92400e; }
+    .chip.high { background: #ffe4e6; color: #9f1239; }
+    .score { font-size: 28px; font-weight: 800; color: #0f172a; }
+    .label { font-size: 13px; font-weight: 600; color: #0f172a; margin-top: 4px; }
+    .action { margin-top: 10px; padding: 8px 10px; border-radius: 8px; font-size: 12px; line-height: 1.4; }
+    .action.high { background: #ffe4e6; color: #9f1239; }
+    .action.medium { background: #fef3c7; color: #92400e; }
+    .action.low { background: #d1fae5; color: #065f46; }
+    .muted { color: #64748b; font-size: 12px; margin-top: 10px; }
+    a { color: #0f4c81; }
+  </style>
+</head>
+<body>
+  <header>
+    <strong>🛡️</strong>
+    <h1>TrustShield</h1>
+  </header>
+  <div id="content">
+    <p class="muted" id="status">Open an email or message and click the floating “Check with TrustShield” button.</p>
+    <div id="result" style="display:none"></div>
+  </div>
+  <script src="popup.js"></script>
+</body>
+</html>
