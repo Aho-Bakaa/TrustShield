@@ -15,6 +15,7 @@ from ..prompts import load as load_prompt
 from ..render import render
 from ..search import verify_batch
 from ..schemas import AnalysisRequest, ChannelType, DetectorResult, Evidence
+from .phishing import _extract_claims_from_text, _verify_sync
 
 
 def run(req: AnalysisRequest, deep: bool) -> DetectorResult:
@@ -126,11 +127,11 @@ def run(req: AnalysisRequest, deep: bool) -> DetectorResult:
             elif claims_raw:
                 claims = claims_raw
             else:
-                claims = extract_claims(req.raw_input)
+                claims = _extract_claims_from_text(req.raw_input)
 
             if claims:
                 pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
-                search_future = pool.submit(verify_claims_sync, claims)
+                search_future = pool.submit(_verify_sync, claims)
                 try:
                     claim_results = search_future.result(timeout=6)
                 except Exception:
