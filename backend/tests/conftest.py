@@ -5,6 +5,10 @@ from pathlib import Path
 
 os.environ["TS_TEST"] = "1"
 os.environ["NETWORK_ENABLED"] = "false"
+# Force offline: the dev machine has GROQ_API_KEY in .env / environment, which
+# would otherwise make tests hit the live LLM (slow, rate-limited, flaky).
+for _k in ("GROQ_API_KEY", "OPENROUTER_API_KEY", "GEMINI_API_KEY"):
+    os.environ[_k] = ""
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
