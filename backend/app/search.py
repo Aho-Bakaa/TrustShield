@@ -18,6 +18,7 @@ import httpx
 from bs4 import BeautifulSoup
 
 from .config import get_settings
+from .data.claim_cache import get_cached, set_cached
 from .log import get_logger
 
 _log = get_logger("search")
@@ -96,48 +97,34 @@ def verify_claim(query: str) -> dict[str, Any]:
         return {"query": query, "status": "not_found", "verified": False,
                 "contradicted": False, "results": [], "summary": "Network disabled."}
 
+    # Fresh cache hit — no network call.
+    cached = get_cached(query)
+    if cached:
+        cached["query"] = query
+        cached["_cache_hit"] = True
+        _log.debug("claim cache hit: %r", query[:80])
+        return cached
+
     results = _search_ddg(query)
+    status, summary = _classify(results)
 
     official = [r for r in results if r["is_official"]]
     reputable = [r for r in results if r["is_reputable"] and not r["is_official"]]
     other = [r for r in results if not r["is_official"] and not r["is_reputable"]]
 
-    verified = len(official) >= 1 or len(reputable) >= 2
-
-    contradicted = False
-    for r in official + reputable:
-        if _DENIAL_RE.search(r.get("snippet", "")):
-            contradicted = True
-            break
-
-    if not results:
-        status = "not_found"
-        summary = "No search results returned."
-    elif contradicted:
-        status = "contradicted"
-        summary = "Official sources contradict this claim."
-    elif verified:
-        status = "verified"
-        src = official[0]["domain"] if official else reputable[0]["domain"]
-        summary = f"Confirmed by {src}."
-    elif reputable:
-        status = "unverified"
-        summary = "Found on news sources but not officially confirmed."
-    else:
-        status = "unverified"
-        summary = "Results found but no official confirmation."
-
-    return {
+    payload = {
         "query": query,
         "status": status,
-        "verified": verified,
-        "contradicted": contradicted,
+        "verified": status == "verified",
+        "contradicted": status == "contradicted",
         "total_results": len(results),
         "official_sources": len(official),
         "news_sources": len(reputable),
         "results": (official + reputable + other)[:6],
         "summary": summary,
     }
+    set_cached(query, payload)
+    return payload
 
 
 def verify_batch(queries: list[str]) -> list[dict[str, Any]]:
