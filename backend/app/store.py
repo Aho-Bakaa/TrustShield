@@ -31,6 +31,17 @@ def _connect() -> sqlite3.Connection:
             )
             """
         )
+        _conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS share_tokens (
+                token TEXT PRIMARY KEY,
+                analysis_id TEXT NOT NULL,
+                created_at TEXT,
+                expires_at TEXT
+            )
+            """
+        )
+        _conn.execute("CREATE INDEX IF NOT EXISTS idx_share_tokens_analysis ON share_tokens(analysis_id)")
         _conn.commit()
     return _conn
 
@@ -83,3 +94,41 @@ def recent(limit: int = 25) -> list[dict]:
         }
         for r in rows
     ]
+
+
+def create_share_token(analysis_id: str, ttl_days: int = 7) -> str:
+    """Create a random share token for an analysis. Returns the token."""
+    import secrets
+    from datetime import datetime, timedelta, timezone
+
+    token = secrets.token_urlsafe(16)
+    now = datetime.now(timezone.utc)
+    expires = now + timedelta(days=ttl_days)
+    with _lock:
+        conn = _connect()
+        conn.execute(
+            "INSERT OR REPLACE INTO share_tokens VALUES (?,?,?,?)",
+            (token, analysis_id, now.isoformat(), expires.isoformat()),
+        )
+        conn.commit()
+    return token
+
+
+def resolve_share_token(token: str) -> str | None:
+    """Return the analysis_id if the token exists and is unexpired, else None."""
+    from datetime import datetime, timezone
+
+    with _lock:
+        conn = _connect()
+        row = conn.execute(
+            "SELECT analysis_id, expires_at FROM share_tokens WHERE token = ?", (token,)
+        ).fetchone()
+    if not row:
+        return None
+    try:
+        expires = datetime.fromisoformat(row[1])
+        if expires < datetime.now(timezone.utc):
+            return None
+    except ValueError:
+        return None
+    return row[0]
