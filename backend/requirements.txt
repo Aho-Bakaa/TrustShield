@@ -22,3 +22,10 @@ playwright>=1.45
 # Optional — domain intelligence (gracefully degrades if absent)
 python-whois>=0.9
 dnspython>=2.6
+
+# Optional — Layer 1 voice spoof model (Wav2Vec2). Heavy; lazy-loaded.
+# torch>=2.1
+# transformers>=4.40
+# Optional — Layer 3 voice ASR (faster-whisper preferred, openai-whisper fallback). Heavy; lazy-loaded.
+# faster-whisper>=1.0
+# openai-whisper>=20231117

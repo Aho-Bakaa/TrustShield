@@ -1,12 +1,15 @@
-"""Voice spoof detection — LFCC + librosa signal features + LLM context reasoning.
+"""Voice spoof detection — Layer 1 (spoof model) + Layer 3 (content/claims).
 
-Signal features adapted from RBI/KAVACH voice anti-spoofing module:
-  - LFCC (Linear Frequency Cepstral Coefficients) via scipy DCT
-  - Librosa MFCC + delta std, pitch CV, energy CV, spectral flatness, ZCR
-  - Produces auxiliary spoof score + human-readable flags
+Layer 1 (synthetic-ness, no base truth needed):
+  - Optional Wav2Vec2-based spoof model (app/models/audio_spoof.py) as primary
+  - LFCC + librosa signal features as fast-path / fallback
 
-LLM fusion:
-  - 40% signal score + 60% LLM context reasoning (plausibility check)
+Layer 3 (content, no base truth needed):
+  - ASR transcription (app/transcribe.py) -> claims -> web-search verification
+    -> content verdict LLM. Catches vishing content regardless of voice source.
+
+Layer 2 (impersonation against a named person) needs an enrollment DB and is
+out of scope for now; `claimed_source` still feeds context to the LLM.
 """
 from __future__ import annotations
 
@@ -17,8 +20,11 @@ from pathlib import Path
 import numpy as np
 
 from ..llm import reason_json
+from ..models.audio_spoof import score_audio
 from ..prompts import load as load_prompt
 from ..schemas import AnalysisRequest, ChannelType, DetectorResult, Evidence
+from ..search import verify_batch
+from ..transcribe import transcribe
 
 
 SAMPLE_RATE = 16000
@@ -157,9 +163,16 @@ def _compute_spoof_indicators(signal: dict) -> dict:
     return {"auxiliary_score": aux_score, "flags": flags, "indicators": indicators}
 
 
-def _fuse_score(neural_score: float, aux_score: float) -> float:
-    W_NEURAL = 0.90
-    W_SIGNAL = 0.10
+def _fuse_score(neural_score: float, aux_score: float, has_model: bool = True) -> float:
+    # When a real spoof model is present it is the primary authority;
+    # signal features are a cheap supplement. Without a model, the signal
+    # proxy is the whole story (historical behaviour).
+    if has_model:
+        W_NEURAL = 0.90
+        W_SIGNAL = 0.10
+    else:
+        W_NEURAL = 0.0
+        W_SIGNAL = 1.0
     return float(np.clip(W_NEURAL * neural_score + W_SIGNAL * aux_score, 0.0, 1.0))
 
 
@@ -212,13 +225,26 @@ def run(req: AnalysisRequest, deep: bool) -> DetectorResult:
                 label="Silent audio", explanation="Audio is silent.",
                 latency_ms=int((time.time() - t0) * 1000), used_llm=False)
 
+        # ---- Layer 1: spoof model (Wav2Vec2) — optional but primary ----
+        model_score = None
+        model_out = score_audio(audio, SAMPLE_RATE)
+        if model_out:
+            model_score = model_out.get("score")
+            fields["spoof_model"] = model_out.get("model")
+            fields["spoof_model_time_var"] = model_out.get("time_var")
+            evidence.append(Evidence(
+                source="voice", label=f"Spoof model ({model_out.get('model', 'wav2vec2')})",
+                detail=f"Neural spoof probability: {model_score:.0%}. "
+                       f"Representation variance {model_out.get('time_var')} — synthetic speech tends to be flatter.",
+                weight=round(float(model_score or 0), 4), severity="medium" if (model_score or 0) > 0.5 else "info"))
+
         lfcc = _compute_lfcc(audio, SAMPLE_RATE)
         lfcc_score = float(np.mean(np.abs(lfcc))) / 100.0
         lfcc_score = min(max(lfcc_score, 0.0), 1.0)
 
         indicators = _compute_spoof_indicators(signal)
         aux_score = indicators["auxiliary_score"]
-        combined = _fuse_score(lfcc_score, aux_score)
+        combined = _fuse_score(model_score if model_score is not None else 0.0, aux_score, has_model=model_score is not None)
 
         for flag in indicators["flags"]:
             evidence.append(Evidence(source="voice", label=flag,
@@ -226,7 +252,7 @@ def run(req: AnalysisRequest, deep: bool) -> DetectorResult:
                 weight=round(min(0.5 + aux_score * 0.5, 0.95), 4), severity="high" if aux_score > 0.5 else "medium"))
 
         evidence.append(Evidence(source="voice", label="LFCC analysis",
-            detail=f"LFCC score: {lfcc_score:.2%} (1084-dim linear frequency cepstral)",
+            detail=f"LFCC score: {lfcc_score:.2%} (linear frequency cepstral)",
             weight=round(lfcc_score, 4), severity="info"))
         evidence.append(Evidence(source="voice", label="Signal indicators",
             detail=f"Pitch CV={indicators['indicators'].get('pitch_variation', 0):.4f}, "
@@ -256,6 +282,7 @@ def run(req: AnalysisRequest, deep: bool) -> DetectorResult:
             "spoof_type": _spoof_type(combined, indicators.get("flags", []), indicators.get("indicators", {})),
             "signal_flags": indicators.get("flags", []),
             "indicators": indicators.get("indicators", {}),
+            "spoof_model": fields.get("spoof_model"),
             "duration_s": fields.get("duration_s", 0),
         }, indent=2, default=str)
 
@@ -278,6 +305,63 @@ def run(req: AnalysisRequest, deep: bool) -> DetectorResult:
             except (ValueError, TypeError):
                 pass
         impersonation_target = data_llm.get("impersonation_target")
+
+        # ---- Layer 3: transcribe -> claims -> web-search -> content verdict ----
+        transcript_result = transcribe(audio, SAMPLE_RATE) if "audio" in locals() else None
+        if transcript_result and transcript_result.get("text", "").strip():
+            transcript = transcript_result["text"].strip()
+            fields["transcript"] = transcript[:1500]
+            fields["transcript_language"] = transcript_result.get("language", "")
+            evidence.append(Evidence(
+                source="voice", label="Transcribed content",
+                detail=f"[{transcript_result.get('language', '?')}] {transcript[:300]}",
+                weight=0.0, severity="info"))
+
+            content_user = (
+                f"CLAIMED SPEAKER: {req.claimed_source or 'unknown'}\n"
+                f"TRANSCRIPT:\n{transcript[:2500]}\n"
+            )
+
+            def _content_neutral():
+                return {"classification": "uncertain", "impersonation_target": impersonation_target,
+                        "claims_to_verify": [], "manipulation_signals": [],
+                        "explanation": "Could not analyze voice content."}
+
+            content, _used = reason_json(load_prompt("voice_content.txt"), content_user, _content_neutral)
+            fields["voice_classification"] = content.get("classification", "uncertain")
+
+            claims = content.get("claims_to_verify", [])
+            if claims and isinstance(claims[0], str):
+                claims = [{"text": c, "type": "voice_claim", "verified": False,
+                           "sources": [], "contradicted": False} for c in claims[:3]]
+            if claims:
+                # verify_batch returns {"query","status",...} per claim.
+                claim_results = verify_batch([c.get("text", "") for c in claims])
+                for c, sr in zip(claims, claim_results):
+                    c["verified"] = sr.get("verified", False)
+                    c["contradicted"] = sr.get("contradicted", False)
+                    c["sources"] = sr.get("results", [])[:5]
+                for sr in claim_results:
+                    status = sr.get("status", "unverified")
+                    if status == "verified":
+                        evidence.append(Evidence(source="search", label="Voice claim verified",
+                            detail=f"'{sr.get('query','')[:120]}' — {sr.get('summary','')}",
+                            weight=-0.1, severity="info"))
+                    elif status == "contradicted":
+                        evidence.append(Evidence(source="search", label="Voice claim CONTRADICTED",
+                            detail=f"'{sr.get('query','')[:120]}' — {sr.get('summary','')}",
+                            weight=0.3, severity="high"))
+                    elif status == "not_found":
+                        evidence.append(Evidence(source="search", label="Voice claim unverified",
+                            detail=f"'{sr.get('query','')[:120]}' — not found in any source.",
+                            weight=0.05, severity="low"))
+
+            for sig in content.get("manipulation_signals", [])[:5]:
+                evidence.append(Evidence(source="voice", label="Manipulation signal",
+                    detail=str(sig)[:200], weight=0.15, severity="medium"))
+            if content.get("impersonation_target"):
+                impersonation_target = content["impersonation_target"]
+                fields["voice_impersonation_target"] = content["impersonation_target"]
 
     fields["impersonation_target"] = impersonation_target
     fields["spoof_probability"] = round(combined, 3)

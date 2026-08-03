@@ -36,6 +36,12 @@ def test_fuse_score_range():
     assert _fuse_score(0.9, 0.0) > _fuse_score(0.1, 0.0)
 
 
+def test_fuse_score_no_model_uses_signal_only():
+    # Without a spoof model, the signal proxy drives the score entirely.
+    assert _fuse_score(0.9, 0.2, has_model=False) == 0.2
+    assert _fuse_score(0.0, 0.8, has_model=False) == 0.8
+
+
 def test_spoof_type_labels():
     assert _spoof_type(0.2, [], {}) == "GENUINE"
     assert _spoof_type(0.9, ["High spectral flatness"], {"spectral_flatness": 0.5}) in ("AI_DEEPFAKE", "VOICE_CONVERSION")
