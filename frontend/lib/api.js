@@ -35,3 +35,15 @@ export async function analyzeImage({ file, claimed_source, context }) {
   if (!r.ok) throw new Error((await r.text()) || "image analyze failed");
   return r.json();
 }
+
+export async function createShare(analysisId) {
+  const r = await fetch(`${BASE}/api/share/${analysisId}`, { method: "POST" });
+  if (!r.ok) throw new Error("share token creation failed");
+  return r.json();
+}
+
+export async function resolveShare(token) {
+  const r = await fetch(`${BASE}/api/share/${token}`, { cache: "no-store" });
+  if (!r.ok) throw new Error("share link invalid or expired");
+  return r.json();
+}
