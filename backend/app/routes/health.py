@@ -5,6 +5,7 @@ from fastapi import APIRouter
 
 from ..config import get_settings
 from ..llm import llm_status
+from ..whatsapp_bot import status as whatsapp_status
 
 router = APIRouter(tags=["health"])
 
@@ -17,4 +18,5 @@ async def health():
         "app": s.app_name,
         "llm": llm_status(),
         "render_enabled": s.render_enabled,
+        "whatsapp": whatsapp_status(),
     }

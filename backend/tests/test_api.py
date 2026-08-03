@@ -42,3 +42,31 @@ def test_recent_endpoint(client):
     r = client.get("/api/recent")
     assert r.status_code == 200
     assert isinstance(r.json(), list)
+
+
+def test_share_flow(client):
+    """Create a share token for an analysis, then resolve it (roadmap 3.2)."""
+    r = client.post("/api/analyze/text", json={"raw_input": "join telegram tips http://tips.top urgent"})
+    assert r.status_code == 200
+    analysis_id = r.json()["id"]
+
+    s = client.post(f"/api/share/{analysis_id}")
+    assert s.status_code == 200
+    token = s.json()["token"]
+    assert token
+
+    resolved = client.get(f"/api/share/{token}")
+    assert resolved.status_code == 200
+    assert resolved.json()["id"] == analysis_id
+
+    bad = client.get("/api/share/nonexistent-token")
+    assert bad.status_code == 410
+
+
+def test_whatsapp_webhook_disabled(client):
+    """WhatsApp webhook returns 403 when not configured (roadmap 3.1)."""
+    r = client.post("/api/whatsapp/webhook", json={"entry": []})
+    assert r.status_code == 403
+    r2 = client.get("/api/whatsapp/webhook", params={
+        "hub.mode": "subscribe", "hub.verify_token": "x", "hub.challenge": "c"})
+    assert r2.status_code == 403

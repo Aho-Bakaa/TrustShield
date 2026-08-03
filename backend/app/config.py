@@ -54,9 +54,20 @@ class Settings(BaseSettings):
     fetch_timeout_seconds: int = 10
     network_enabled: bool = True
 
+    # Voice detection (roadmap 2.2 / layer 1 + 3)
+    voice_spoof_model_enabled: bool = True
+    voice_spoof_model: str = "facebook/wav2vec2-base"  # Wav2Vec2 for spoof scoring
+    voice_asr_enabled: bool = True
+    voice_asr_model: str = "base"  # faster-whisper model size
+
     db_path: str = "trustshield.db"
 
     cors_origins: str = "http://localhost:3000,http://127.0.0.1:3000"
+
+    # WhatsApp Cloud API (roadmap 3.1). Empty = webhook disabled.
+    whatsapp_verify_token: str = ""
+    whatsapp_access_token: str = ""
+    whatsapp_phone_number_id: str = ""
 
     @property
     def resolved_model(self) -> str:

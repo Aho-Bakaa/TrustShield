@@ -6,6 +6,7 @@ backend/uploads/
 backend/*.db
 backend/*.log
 backend/.env
+backend/*_pending.json
 ARCHITECTURE.md
 # Node / Next
 frontend/node_modules/

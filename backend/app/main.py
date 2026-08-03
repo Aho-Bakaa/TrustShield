@@ -11,7 +11,7 @@ from fastapi.staticfiles import StaticFiles
 from .config import get_settings
 from .llm import llm_status
 from .log import get_logger, setup_logging
-from .routes import analyze, health
+from .routes import analyze, health, share, whatsapp
 
 settings = get_settings()
 setup_logging()
@@ -45,6 +45,8 @@ app.add_middleware(
 
 app.include_router(health.router)
 app.include_router(analyze.router)
+app.include_router(whatsapp.router)
+app.include_router(share.router)
 
 _FIXTURES = Path(__file__).parent / "fixtures"
 app.mount("/fixtures", StaticFiles(directory=str(_FIXTURES), html=True), name="fixtures")
