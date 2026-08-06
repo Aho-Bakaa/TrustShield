@@ -65,6 +65,11 @@ class Settings(BaseSettings):
 
     cors_origins: str = "*"
 
+    # Langfuse observability — traces every LLM call + verdict for improvement.
+    langfuse_public_key: str = ""
+    langfuse_secret_key: str = ""
+    langfuse_host: str = "https://cloud.langfuse.com"
+
     # WhatsApp Cloud API (roadmap 3.1). Empty = webhook disabled.
     whatsapp_verify_token: str = ""
     whatsapp_access_token: str = ""

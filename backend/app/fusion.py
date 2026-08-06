@@ -27,6 +27,7 @@ from .schemas import (
     RiskLevel,
     TraceStep,
 )
+from .tracing import trace_flush, trace_generation, trace_start, trace_step
 
 _log = get_logger("fusion")
 
@@ -110,6 +111,9 @@ def analyze(req: AnalysisRequest) -> AnalysisResult:
     t_start = datetime.now(timezone.utc)
     aid = uuid.uuid4().hex[:12]
     tag = f"[{aid[:6]}]"
+
+    # Langfuse trace — spans the full pipeline.
+    lf_trace = trace_start("analysis", metadata={"analysis_id": aid, "channel": req.channel_type.value})
 
     detector_mod = _DETECTOR_FOR.get(req.channel_type, phishing)
     det_name = detector_mod.__name__.split(".")[-1]
