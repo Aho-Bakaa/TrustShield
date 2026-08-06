@@ -42,7 +42,7 @@ class Settings(BaseSettings):
     llm_timeout_seconds: int = 30
     llm_reasoning_effort: str = ""
 
-    llm_vision_model: str = "groq/meta-llama/llama-4-scout-17b-16e-instruct"
+    llm_vision_model: str = "qwen/qwen3.6-27b"
 
     groq_api_key: str = ""
     openrouter_api_key: str = ""

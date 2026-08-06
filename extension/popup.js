@@ -1,34 +1,41 @@
 // TrustShield extension — popup script.
-// Shows the last verdict stored by the background worker.
+// Reads the latest stored verdict and renders it in a polished card.
 
 chrome.storage.local.get(["lastResult", "lastError"], ({ lastResult, lastError }) => {
-  const status = document.getElementById("status");
+  const empty = document.getElementById("empty");
   const resultDiv = document.getElementById("result");
 
   if (lastError) {
-    status.textContent = "Last check failed: " + lastError;
+    empty.style.display = "none";
+    resultDiv.innerHTML = `<div style="color:#dc2626;font-size:12px;padding:8px;">Last check failed: ${escapeHtml(lastError)}</div>`;
     return;
   }
   if (!lastResult) {
-    status.textContent = "No checks yet. Open an email/message and click the floating “Check with TrustShield” button.";
+    empty.style.display = "block";
     return;
   }
 
-  status.style.display = "none";
-  resultDiv.style.display = "block";
+  empty.style.display = "none";
 
-  const level = lastResult.risk_level || "low";
+  const lvl = lastResult.risk_level || "low";
   resultDiv.innerHTML = `
-    <div class="chip ${level}">${level.toUpperCase()}</div>
-    <div class="score">${lastResult.risk_score ?? "–"}/100</div>
-    <div class="label">${escapeHtml(lastResult.threat_label || "")}</div>
-    <div class="action ${level}">${escapeHtml(lastResult.recommended_action || "")}</div>
-    <p class="muted">${escapeHtml((lastResult.summary || "").slice(0, 200))}</p>
+    <div class="verdict ${lvl}">
+      <div class="level-row">
+        <span class="dot ${lvl}"></span>
+        <span class="badge ${lvl}">${lvl === "low" ? "LOW RISK / VERIFIED" : lvl === "medium" ? "SUSPICIOUS / REVIEW" : "HIGH RISK / LIKELY THREAT"}</span>
+      </div>
+      <div class="risk ${lvl}">${lastResult.risk_score ?? "–"}<small>/100</small></div>
+      <div class="label">${escapeHtml(lastResult.threat_label || "")}</div>
+      <div class="summary">${escapeHtml((lastResult.summary || "").slice(0, 200))}</div>
+    </div>
+    <div class="action">
+      <h3>What to do</h3>
+      <p>${escapeHtml(lastResult.recommended_action || "")}</p>
+    </div>
+    <div class="muted" style="text-align:right;">Analysis ID: ${escapeHtml(lastResult.id || "").slice(0, 12)}</div>
   `;
 });
 
 function escapeHtml(s) {
-  return String(s).replace(/[&<>"']/g, c => ({
-    "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
-  }[c]));
+  return String(s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 }
