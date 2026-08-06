@@ -32,6 +32,19 @@ def _host_of(url: str) -> str:
     return (urlparse(u).hostname or "").lower().lstrip("www.")
 
 
+# Key phrases that suggest this input is a securities-market communication.
+# If none of these match, the input is likely irrelevant.
+_SECURITIES_MARKERS = re.compile(
+    r"\b(sebi|rbi|nse|bse|nsdl|cdsl|demat|kyc|otp|password|upi|"
+    r"ipo|mutual fund|broker|zerodha|groww|angel one|upstox|"
+    r"cams|kfintech|scores|investor|share(s)?|dividend|bonus|"
+    r"stock|trading|portfolio|holding(s)?|folio|nominee|"
+    r"fraud|scam|phish(ing)?|suspended|frozen|verify|urgent|"
+    r"5paisa|icici direct|hdfc securities|paytm money|mstock|"
+    r"securities|exchange|regulator(y)?)\b",
+    re.I,
+)
+
 _QUERY_MARKERS = re.compile(
     r"\?\s*$|^(?:is|are|was|were|will|would|can|could|should|has|have|did|do|does|what|why|how|who|when|where)\b|\?\?+",
     re.I,
@@ -40,6 +53,20 @@ _HEADLINE_MARKERS = re.compile(
     r"^(?:BREAKING|JUST IN|UPDATE|ALERT|RUMOUR|RUMOR|NEWS)\b",
     re.I,
 )
+
+
+def is_relevant(text: str, entities: list) -> bool:
+    """Return True if the input contains at least one securities-market signal."""
+    if not text or not text.strip():
+        return False
+    if entities:
+        return True
+    urls = extract_urls(text)
+    if urls:
+        return True  # always check links — could be a phishing URL
+    if _SECURITIES_MARKERS.search(text):
+        return True
+    return False
 
 
 def classify_channel(text: str, has_audio: bool, hint: ChannelType | None) -> ChannelType:

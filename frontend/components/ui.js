@@ -28,6 +28,15 @@ export const LEVEL_STYLES = {
     grad: "from-rose-600 to-red-500",
     badge: "border-rose-200 bg-rose-50 text-rose-705"
   },
+  irrelevant: {
+    ring: "ring-slate-400/20 border-slate-400/30",
+    text: "text-slate-500",
+    bg: "bg-slate-50",
+    dot: "bg-slate-400",
+    label: "OUT OF SCOPE / IRRELEVANT",
+    grad: "from-slate-400 to-slate-500",
+    badge: "border-slate-200 bg-slate-50 text-slate-500"
+  },
 };
 
 const SEV = {
@@ -60,14 +69,13 @@ export function LevelChip({ level }) {
 export function RiskGauge({ score, level }) {
   const s = LEVEL_STYLES[level] || LEVEL_STYLES.low;
   const pct = Math.max(0, Math.min(100, score));
-  const radius = 45;
+  const radius = 35;
   const circumference = 2 * Math.PI * radius;
   const strokeDashoffset = circumference - (pct / 100) * circumference;
-  
-  const color = level === "high" ? "#e11d48" : level === "medium" ? "#d97706" : "#059669";
-  
+  const color = level === "high" ? "#e11d48" : level === "medium" ? "#d97706" : level === "irrelevant" ? "#94a3b8" : "#059669";
+
   return (
-    <div className="relative flex h-32 w-32 shrink-0 items-center justify-center rounded-2xl bg-slate-50 p-2 border border-slate-200 shadow-inner">
+    <div className="relative flex h-24 w-24 shrink-0 items-center justify-center rounded-2xl bg-slate-50 p-2 border border-slate-200 shadow-inner">
       <svg className="h-full w-full -rotate-90 transform" viewBox="0 0 100 100">
         <defs>
           <linearGradient id="gaugeGradient" x1="0%" y1="0%" x2="100%" y2="100%">
@@ -75,33 +83,14 @@ export function RiskGauge({ score, level }) {
             <stop offset="100%" stopColor={color} />
           </linearGradient>
         </defs>
-        {/* Background Circle */}
-        <circle
-          cx="50"
-          cy="50"
-          r={radius}
-          className="stroke-slate-200"
-          strokeWidth="6"
-          fill="transparent"
-        />
-        {/* Animated Progress Circle */}
-        <circle
-          cx="50"
-          cy="50"
-          r={radius}
-          stroke="url(#gaugeGradient)"
-          strokeWidth="7"
-          fill="transparent"
-          strokeDasharray={circumference}
-          strokeDashoffset={strokeDashoffset}
-          strokeLinecap="round"
-          style={{ transition: "stroke-dashoffset 1s cubic-bezier(0.4, 0, 0.2, 1)" }}
-        />
+        <circle cx="50" cy="50" r={radius} className="stroke-slate-200" strokeWidth="6" fill="transparent" />
+        <circle cx="50" cy="50" r={radius} stroke="url(#gaugeGradient)" strokeWidth="7" fill="transparent"
+          strokeDasharray={circumference} strokeDashoffset={strokeDashoffset} strokeLinecap="round"
+          style={{ transition: "stroke-dashoffset 1s cubic-bezier(0.4, 0, 0.2, 1)" }} />
       </svg>
-      {/* Center Text */}
       <div className="absolute flex flex-col items-center justify-center">
-        <span className={`text-3xl font-extrabold tracking-tight tabular-nums ${s.text}`}>{score}</span>
-        <span className="text-[9px] font-bold uppercase tracking-widest text-slate-500">Risk Score</span>
+        <span className={`text-2xl font-extrabold tracking-tight tabular-nums ${s.text}`}>{score}</span>
+        <span className="text-[8px] font-bold uppercase tracking-widest text-slate-500">Risk Score</span>
       </div>
     </div>
   );

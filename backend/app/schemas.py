@@ -20,6 +20,7 @@ class RiskLevel(str, Enum):
     LOW = "low"        # green  — verified / low risk
     MEDIUM = "medium"  # amber  — suspicious / review
     HIGH = "high"      # red    — high risk / likely fake
+    IRRELEVANT = "irrelevant"  # grey — not a securities-market communication
 
 
 class Entity(BaseModel):

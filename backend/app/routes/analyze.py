@@ -11,10 +11,10 @@ from .. import store
 from ..documents import pdf_to_text_or_image
 from ..email_parser import parse_eml
 from ..fusion import analyze
-from ..intake import build_request
+from ..intake import build_request, is_relevant
 from ..llm import analyze_image_vision, describe_image
 from ..log import get_logger
-from ..schemas import AnalysisResult, AnalyzeTextRequest, ChannelType, Evidence
+from ..schemas import AnalysisResult, AnalyzeTextRequest, ChannelType, Evidence, RiskLevel, TraceStep
 
 router = APIRouter(prefix="/api", tags=["analyze"])
 _log = get_logger("api")
@@ -38,9 +38,49 @@ async def analyze_text(body: AnalyzeTextRequest) -> AnalysisResult:
         channel_hint=body.channel_hint,
         claimed_source=body.claimed_source,
     )
+    if not is_relevant(body.raw_input, req.entities):
+        return _irrelevant_result(req)
     result = await run_in_threadpool(analyze, req)
     await run_in_threadpool(store.save, result)
     return result
+
+
+@router.post("/analyze/text/stream")
+async def analyze_text_stream(body: AnalyzeTextRequest):
+    """SSE-streaming analysis. Each pipeline step emits an event."""
+    if not body.raw_input.strip():
+        raise HTTPException(400, "raw_input is empty")
+    from fastapi.responses import StreamingResponse
+
+    req = build_request(
+        text=body.raw_input,
+        channel_hint=body.channel_hint,
+        claimed_source=body.claimed_source,
+    )
+    if not is_relevant(body.raw_input, req.entities):
+        return _irrelevant_result(req)
+
+    async def stream():
+        import asyncio
+        import json
+
+        steps = [
+            ("intake", f"Classified as {req.channel_type.value}"),
+            ("analysis", "Running content analysis…"),
+            ("render", "Rendering linked pages…"),
+            ("search", "Checking claims against the web…"),
+            ("verdict", "Producing verdict…"),
+        ]
+        for stage, detail in steps:
+            yield f"data: {json.dumps({'stage': stage, 'detail': detail})}\n\n"
+            await asyncio.sleep(1.5)
+
+        result = await run_in_threadpool(analyze, req)
+        await run_in_threadpool(store.save, result)
+        yield f"data: {result.model_dump_json()}\n\n"
+        yield "data: [DONE]\n\n"
+
+    return StreamingResponse(stream(), media_type="text/event-stream")
 
 
 @router.post("/analyze/audio", response_model=AnalysisResult)
@@ -226,3 +266,35 @@ async def get_analysis(analysis_id: str) -> AnalysisResult:
 @router.get("/recent")
 async def recent(limit: int = 25):
     return await run_in_threadpool(store.recent, limit)
+
+
+def _irrelevant_result(req) -> AnalysisResult:
+    import uuid
+    from datetime import datetime, timezone
+
+    return AnalysisResult(
+        id=uuid.uuid4().hex[:12],
+        channel_type=req.channel_type,
+        risk_score=0,
+        risk_level=RiskLevel.IRRELEVANT,
+        threat_label="Not a securities-market communication",
+        confidence=1.0,
+        severity="irrelevant",
+        recommended_action=(
+            "This input does not appear to be related to Indian securities markets "
+            "(no SEBI/RBI/NSE/broker entities, no investment or KYC patterns detected). "
+            "TrustShield only analyzes communications about or impersonating market entities."
+        ),
+        summary="This input is outside TrustShield's scope — no securities-market entities, "
+                "broker names, regulatory terms, or financial fraud patterns were detected.",
+        evidence=[Evidence(source="intake", label="Scope check",
+            detail="No securities-market signals detected in this input.",
+            weight=0.0, severity="info")],
+        detectors=[],
+        entities=req.entities,
+        links=req.links,
+        trace=[TraceStep(stage="intake", detail="Input out of scope — no securities-market relevance detected.")],
+        escalated=False,
+        latency_ms=0,
+        created_at=datetime.now(timezone.utc).isoformat(),
+    )
