@@ -54,15 +54,16 @@ class Settings(BaseSettings):
     fetch_timeout_seconds: int = 10
     network_enabled: bool = True
 
-    # Voice detection (roadmap 2.2 / layer 1 + 3)
+    # Voice detection (roadmap 2.2 / layer 1 + 3).
+    # Layer 1: Groq reasoning LLM scores signal features for spoof probability.
+    # Layer 3: Groq Whisper API transcribes audio for content-claim analysis.
+    # Both use the existing GROQ_API_KEY — no extra credentials needed.
     voice_spoof_model_enabled: bool = True
-    voice_spoof_model: str = "facebook/wav2vec2-base"  # Wav2Vec2 for spoof scoring
     voice_asr_enabled: bool = True
-    voice_asr_model: str = "base"  # faster-whisper model size
 
     db_path: str = "trustshield.db"
 
-    cors_origins: str = "http://localhost:3000,http://127.0.0.1:3000"
+    cors_origins: str = "*"
 
     # WhatsApp Cloud API (roadmap 3.1). Empty = webhook disabled.
     whatsapp_verify_token: str = ""

@@ -225,25 +225,29 @@ def run(req: AnalysisRequest, deep: bool) -> DetectorResult:
                 label="Silent audio", explanation="Audio is silent.",
                 latency_ms=int((time.time() - t0) * 1000), used_llm=False)
 
-        # ---- Layer 1: spoof model (Wav2Vec2) — optional but primary ----
-        model_score = None
-        model_out = score_audio(audio, SAMPLE_RATE)
-        if model_out:
-            model_score = model_out.get("score")
-            fields["spoof_model"] = model_out.get("model")
-            fields["spoof_model_time_var"] = model_out.get("time_var")
-            evidence.append(Evidence(
-                source="voice", label=f"Spoof model ({model_out.get('model', 'wav2vec2')})",
-                detail=f"Neural spoof probability: {model_score:.0%}. "
-                       f"Representation variance {model_out.get('time_var')} — synthetic speech tends to be flatter.",
-                weight=round(float(model_score or 0), 4), severity="medium" if (model_score or 0) > 0.5 else "info"))
-
+        # ---- Layer 1: spoof model (Groq LLM) — optional but primary ----
         lfcc = _compute_lfcc(audio, SAMPLE_RATE)
         lfcc_score = float(np.mean(np.abs(lfcc))) / 100.0
         lfcc_score = min(max(lfcc_score, 0.0), 1.0)
 
         indicators = _compute_spoof_indicators(signal)
         aux_score = indicators["auxiliary_score"]
+
+        model_score = None
+        model_out = score_audio(audio, SAMPLE_RATE, signal_features=signal, signal_indicators=indicators)
+        if model_out:
+            model_score = model_out.get("score")
+            fields["spoof_model"] = model_out.get("model")
+            fields["spoof_model_latency_ms"] = model_out.get("latency_ms")
+            evidence.append(Evidence(
+                source="voice", label=f"Spoof model ({model_out.get('model', 'groq')})",
+                detail=f"Neural spoof probability: {model_score:.0%}. "
+                       f"Signal-based classification.",
+                weight=round(float(model_score or 0), 4), severity="medium" if (model_score or 0) > 0.5 else "info"))
+            for pattern in model_out.get("vishing_patterns", [])[:3]:
+                evidence.append(Evidence(source="voice", label="Vishing pattern",
+                    detail=str(pattern)[:200], weight=0.12, severity="medium"))
+
         combined = _fuse_score(model_score if model_score is not None else 0.0, aux_score, has_model=model_score is not None)
 
         for flag in indicators["flags"]:

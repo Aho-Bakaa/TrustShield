@@ -1,72 +1,70 @@
 """Layer 3 — ASR transcription for voice content analysis.
 
-Transcribes an audio clip to text so the SAME phishing/claims pipeline used for
-emails can verify the *content* of a call (false claims, urgency, credential
-demands) regardless of whether the voice is synthetic.
+Transcribes an audio clip using the Groq Whisper API so the content can feed
+the same claims / web-search / verdict pipeline used for emails.
 
-Uses faster-whisper (a CTranslate2-accelerated Whisper) if available, else the
-`openai-whisper` package. Lazy-loaded, optional dependency — if neither is
-installed, returns None and the caller skips content analysis.
+No local models required — uses the existing GROQ_API_KEY. Fast (~1-3s per
+30s clip), ~$0.04/hr of audio. Degrades gracefully when the Groq key is absent
+(via the `llm_available` check).
 """
 from __future__ import annotations
 
+import base64
+import io
 import logging
 from typing import Any
 
 import numpy as np
+import soundfile as sf
 
 from .config import get_settings
+from .llm import llm_status
 
 _log = logging.getLogger("ts.voice.asr")
 
-_model = None
-_model_loaded = False
 
+def transcribe(audio: np.ndarray, sample_rate: int = 16000) -> dict[str, Any] | None:
+    """Transcribe audio via Groq Whisper API.
 
-def _load_model():
-    global _model, _model_loaded
-    if _model_loaded:
-        return _model
-    _model_loaded = True
+    Returns {'text': str, 'language': str} or None if unavailable/broken.
+    """
     settings = get_settings()
     if not settings.voice_asr_enabled:
         return None
-    try:
-        from faster_whisper import WhisperModel  # type: ignore
 
-        _model = {"kind": "faster_whisper", "model": WhisperModel(settings.voice_asr_model, device="cpu", compute_type="int8")}
-        _log.info("ASR model loaded: faster-whisper %s", settings.voice_asr_model)
-        return _model
-    except Exception as exc:
-        _log.info("faster-whisper unavailable (%s) — trying openai-whisper", str(exc)[:100])
-    try:
-        import whisper  # type: ignore
-
-        _model = {"kind": "openai_whisper", "model": whisper.load_model(settings.voice_asr_model)}
-        _log.info("ASR model loaded: openai-whisper %s", settings.voice_asr_model)
-        return _model
-    except Exception as exc:
-        _log.warning("no ASR model available (%s) — content analysis skipped", str(exc)[:100])
-        _model = None
+    stat = llm_status()
+    if not stat["available"]:
+        _log.info("ASR skipped: LLM key not configured")
         return None
 
-
-def transcribe(audio: np.ndarray, sample_rate: int = 16000) -> dict[str, Any] | None:
-    """Transcribe audio to text. Returns {'text': str, 'language': str} or None."""
-    m = _load_model()
-    if not m:
-        return None
     try:
-        if m["kind"] == "faster_whisper":
-            segments, info = m["model"].transcribe(audio, sampling_rate=sample_rate)
-            text = " ".join(seg.text.strip() for seg in segments).strip()
-            return {"text": text, "language": info.language}
-        # openai-whisper
-        import numpy as _np
+        import httpx
 
-        audio_fp32 = audio.astype(_np.float32)
-        result = m["model"].transcribe(audio_fp32)
-        return {"text": (result.get("text") or "").strip(), "language": result.get("language", "")}
+        # Convert numpy → WAV bytes (Groq accepts multipart audio file uploads).
+        buf = io.BytesIO()
+        sf.write(buf, audio, sample_rate, format="WAV")
+        buf.seek(0)
+
+        files = {"file": ("audio.wav", buf, "audio/wav")}
+        data = {"model": "whisper-large-v3-turbo", "response_format": "json"}
+
+        resp = httpx.post(
+            "https://api.groq.com/openai/v1/audio/transcriptions",
+            headers={"Authorization": f"Bearer {settings.groq_api_key}"},
+            files=files,
+            data=data,
+            timeout=45,
+        )
+
+        if resp.status_code != 200:
+            _log.warning("Groq ASR returned %s: %s", resp.status_code, resp.text[:200])
+            return None
+
+        result = resp.json()
+        text = (result.get("text") or "").strip()
+        lang = result.get("language", "")
+        _log.info("ASR transcribed %d chars (lang=%s)", len(text), lang)
+        return {"text": text, "language": lang}
     except Exception as exc:
         _log.warning("ASR failed: %s", str(exc)[:150])
         return None
