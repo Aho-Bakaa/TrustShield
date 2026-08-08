@@ -21,6 +21,7 @@ import numpy as np
 
 from ..llm import reason_json
 from ..models.audio_spoof import score_audio
+from ..models.voice_kavach import score as score_indicwav
 from ..prompts import load as load_prompt
 from ..schemas import AnalysisRequest, ChannelType, DetectorResult, Evidence
 from ..search import verify_batch
@@ -234,8 +235,20 @@ def run(req: AnalysisRequest, deep: bool) -> DetectorResult:
         aux_score = indicators["auxiliary_score"]
 
         model_score = None
+        # Try local IndicWav2Vec2 first (98.93% accuracy, offline)
+        indic_out = score_indicwav(audio, SAMPLE_RATE)
+        if indic_out:
+            model_score = indic_out.get("score")
+            fields["spoof_model"] = indic_out.get("model")
+            fields["spoof_model_latency_ms"] = indic_out.get("latency_ms")
+            evidence.append(Evidence(
+                source="voice", label="Spoof model (indicwav2vec-hindi)",
+                detail=f"Local spoof probability: {model_score:.0%} ({indic_out.get('label', '?')}).",
+                weight=round(float(model_score or 0), 4),
+                severity="medium" if (model_score or 0) > 0.5 else "info"))
+        # Fallback: Groq LLM acoustic reasoning
         model_out = score_audio(audio, SAMPLE_RATE, signal_features=signal, signal_indicators=indicators)
-        if model_out:
+        if model_out and model_score is None:
             model_score = model_out.get("score")
             fields["spoof_model"] = model_out.get("model")
             fields["spoof_model_latency_ms"] = model_out.get("latency_ms")
@@ -243,7 +256,8 @@ def run(req: AnalysisRequest, deep: bool) -> DetectorResult:
                 source="voice", label=f"Spoof model ({model_out.get('model', 'groq')})",
                 detail=f"Neural spoof probability: {model_score:.0%}. "
                        f"Signal-based classification.",
-                weight=round(float(model_score or 0), 4), severity="medium" if (model_score or 0) > 0.5 else "info"))
+                weight=round(float(model_score or 0), 4),
+                severity="medium" if (model_score or 0) > 0.5 else "info"))
             for pattern in model_out.get("vishing_patterns", [])[:3]:
                 evidence.append(Evidence(source="voice", label="Vishing pattern",
                     detail=str(pattern)[:200], weight=0.12, severity="medium"))
