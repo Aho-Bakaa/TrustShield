@@ -233,7 +233,6 @@ def run(req: AnalysisRequest, deep: bool) -> DetectorResult:
                     source="verdict", label="Key evidence",
                     detail=str(k)[:200], weight=0.1, severity="info"))
 
-    prob = 0.15
     label = "Likely manipulation" if prob >= 0.6 else ("Suspicious" if prob >= 0.35 else "Low manipulation risk")
     return DetectorResult(
         name="social", channel=ChannelType.SOCIAL, probability=round(prob, 3),

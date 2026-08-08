@@ -231,7 +231,7 @@ def run(req: AnalysisRequest, deep: bool) -> DetectorResult:
                     "key_evidence": [f"Suspicious link: {link.reasons}"],
                     "explanation": "Link flagged with warning signals.",
                     "recommended_action": "caution"}
-        return {"threat_probability": 0.15, "input_type": channel,
+        return {"threat_probability": 0.05, "input_type": channel,
                 "impersonated_entity": impersonated,
                 "domain_mismatch": False, "credential_capture": False,
                 "key_evidence": [], "explanation": "No strong threat signals.",
@@ -270,7 +270,7 @@ def run(req: AnalysisRequest, deep: bool) -> DetectorResult:
             evidence.append(Evidence(source="search", label="Unverified claim",
                 detail=f"'{sr.get('query','')[:120]}' — {sr.get('summary','')}", weight=0.05, severity="low"))
 
-    prob = 0.15
+    prob = 0.05
     try:
         prob = float(data.get("threat_probability", prob))
     except Exception:
