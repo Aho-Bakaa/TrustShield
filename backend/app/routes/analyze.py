@@ -24,6 +24,7 @@ _UPLOADS.mkdir(exist_ok=True)
 _AUDIO_EXT = {".wav", ".flac", ".ogg", ".mp3", ".m4a", ".aac", ".opus"}
 _IMAGE_EXT = {".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp"}
 _DOC_EXT = _IMAGE_EXT | {".pdf", ".eml"}
+_VIDEO_EXT = {".mp4", ".avi", ".mov", ".mkv", ".webm"}
 _MIME = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
          ".webp": "image/webp", ".gif": "image/gif", ".bmp": "image/bmp"}
 
@@ -103,6 +104,38 @@ async def analyze_audio(
         claimed_source=claimed_source,
         original_filename=file.filename,
     )
+    result = await run_in_threadpool(analyze, req)
+    await run_in_threadpool(store.save, result)
+    return result
+
+
+@router.post("/analyze/video", response_model=AnalysisResult)
+async def analyze_video(
+    file: UploadFile = File(...),
+    claimed_source: str | None = Form(None),
+    context: str | None = Form(None),
+) -> AnalysisResult:
+    """Analyze a video file for deepfake detection via KAVACH API.
+
+    Supported: MP4, AVI, MOV, MKV, WEBM. Max 100MB.
+    Delegates to the ath1614/RBI 5-model ensemble detector.
+    """
+    ext = Path(file.filename or "clip.mp4").suffix.lower()
+    if ext not in _VIDEO_EXT:
+        raise HTTPException(400, f"Unsupported video type '{ext}'. Use {sorted(_VIDEO_EXT)}")
+    dest = _UPLOADS / f"{uuid.uuid4().hex[:10]}{ext}"
+    data = await file.read()
+    if len(data) > 100 * 1024 * 1024:
+        raise HTTPException(413, "Video too large (max 100MB)")
+    dest.write_bytes(data)
+
+    req = build_request(
+        text=context or "",
+        channel_hint=ChannelType.VIDEO,
+        claimed_source=claimed_source,
+        original_filename=file.filename,
+    )
+    req.attachments = [str(dest)]
     result = await run_in_threadpool(analyze, req)
     await run_in_threadpool(store.save, result)
     return result

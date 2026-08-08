@@ -5,6 +5,7 @@ import EvidenceList from "@/components/EvidenceList";
 import TracePanel from "@/components/TracePanel";
 import { LevelChip, RiskGauge, Bar, LEVEL_STYLES, IconChevron } from "@/components/ui";
 import VoicePanel from "@/components/VoicePanel";
+import VideoPanel from "@/components/VideoPanel";
 import { getHealth, createShare } from "@/lib/api";
 
 const PHASES = ["Classifying input", "Analyzing content", "Rendering pages", "Verifying claims", "Producing verdict"];
@@ -89,6 +90,7 @@ function DetailsSection({ result, hasLinks, hasEntities }) {
       </button>
       {open && (
         <div className="space-y-6 border-t border-slate-100 p-6">
+          <VideoPanel fields={result.detectors?.[0]?.fields} />
           <VoicePanel fields={result.detectors?.[0]?.fields} />
           <EvidenceList evidence={mainEvidence} />
           {searchEvidence.length > 0 && (

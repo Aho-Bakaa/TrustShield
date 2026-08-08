@@ -1,14 +1,15 @@
 "use client";
 import { useEffect, useRef, useState } from "react";
-import { analyzeAudio, analyzeImage, analyzeText } from "@/lib/api";
+import { analyzeAudio, analyzeImage, analyzeText, analyzeVideo } from "@/lib/api";
 import { SAMPLES } from "@/lib/samples";
 import { IconImage, IconShield, IconSparkles } from "./ui";
 
-const ACCEPT = ".png,.jpg,.jpeg,.webp,.gif,.bmp,.pdf,.eml,.wav,.flac,.ogg,.mp3,.m4a,.aac,.opus";
+const ACCEPT = ".png,.jpg,.jpeg,.webp,.gif,.bmp,.pdf,.eml,.wav,.flac,.ogg,.mp3,.m4a,.aac,.opus,.mp4,.avi,.mov,.mkv,.webm";
 
 function guessFileType(f) {
   if (!f) return null;
   if (f.type.startsWith("audio/")) return "audio";
+  if (f.type.startsWith("video/") || f.name.endsWith(".mp4") || f.name.endsWith(".avi") || f.name.endsWith(".mov")) return "video";
   if (f.type.startsWith("image/") || f.type === "application/pdf" || f.name.endsWith(".eml")) return "image";
   return "image";
 }
@@ -44,6 +45,9 @@ export default function IntakeForm({ onStart, onResult, onError }) {
       if (fileType === "audio") {
         if (!file) throw new Error("Please select or drop an audio file first.");
         res = await analyzeAudio({ file, claimed_source: c, context: t });
+      } else if (fileType === "video") {
+        if (!file) throw new Error("Please select or drop a video file first.");
+        res = await analyzeVideo({ file, claimed_source: c, context: t });
       } else if (fileType === "image") {
         if (!file) throw new Error("Please select, drop or paste an image/PDF first.");
         res = await analyzeImage({ file, claimed_source: c, context: t });

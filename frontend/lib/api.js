@@ -36,6 +36,16 @@ export async function analyzeImage({ file, claimed_source, context }) {
   return r.json();
 }
 
+export async function analyzeVideo({ file, claimed_source, context }) {
+  const fd = new FormData();
+  fd.append("file", file);
+  if (claimed_source) fd.append("claimed_source", claimed_source);
+  if (context) fd.append("context", context);
+  const r = await fetch(`${BASE}/api/analyze/video`, { method: "POST", body: fd });
+  if (!r.ok) throw new Error((await r.text()) || "video analyze failed");
+  return r.json();
+}
+
 export async function createShare(analysisId) {
   const r = await fetch(`${BASE}/api/share/${analysisId}`, { method: "POST" });
   if (!r.ok) throw new Error("share token creation failed");

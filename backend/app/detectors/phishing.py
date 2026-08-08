@@ -170,6 +170,7 @@ def run(req: AnalysisRequest, deep: bool) -> DetectorResult:
                         f"reasons={link.reasons}")
 
     user = (
+        f"SCORING KEY: classification=phishing_email → 0.70-0.95 | classification=spam_or_rumor → 0.40-0.65 | broker_notification/mutual_fund_statement/educational/regulatory_circular → 0.01-0.12. DEAD/ERROR PAGE does not reduce score — use intent as primary signal.\n\n"
         f"## INPUT TYPE\n{req.channel_type.value}\n\n"
         f"## ORIGINAL MESSAGE\n{req.raw_input[:2000]}\n\n"
         f"## INTENT ANALYSIS\n{json.dumps(intent_data, indent=2, default=str)}\n\n"
@@ -276,6 +277,12 @@ def run(req: AnalysisRequest, deep: bool) -> DetectorResult:
     except Exception:
         pass
     prob = max(0.0, min(prob, 1.0))
+
+    # Safety floor: intent classifier is authoritative when it says phishing_email.
+    # The LLM sometimes ignores prompt instructions when page forensics are empty
+    # (dead/error page), so this single-line floor prevents 0.05 on obvious phishing.
+    if classific == "phishing_email":
+        prob = max(prob, 0.70)
 
     fields["impersonated_entity"] = data.get("impersonated_entity", impersonated)
     fields["domain_mismatch"] = bool(data.get("domain_mismatch", False))

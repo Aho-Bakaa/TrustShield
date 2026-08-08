@@ -16,7 +16,7 @@ from datetime import datetime, timezone
 
 from .config import get_settings
 from .detectors import authenticity as authenticity_engine
-from .detectors import phishing, social, voice
+from .detectors import deepfake, phishing, social, voice
 from .log import get_logger
 from .preprocessing.entities import max_criticality
 from .schemas import (
@@ -36,6 +36,7 @@ _DETECTOR_FOR = {
     ChannelType.URL: phishing,
     ChannelType.SOCIAL: social,
     ChannelType.AUDIO: voice,
+    ChannelType.VIDEO: deepfake,
     ChannelType.QUERY: phishing,
     ChannelType.UNKNOWN: phishing,
 }
@@ -55,6 +56,7 @@ def _recommended_action(level: RiskLevel, channel: ChannelType, verified: bool) 
             ChannelType.URL: "High risk. Do NOT enter credentials or payment details on this page. Report the domain and avoid it.",
             ChannelType.SOCIAL: "High risk. Do NOT act on this tip, join the linked group, or transfer funds. Report the post to the platform.",
             ChannelType.AUDIO: "High risk. Do NOT act on instructions in this call. Call back on the organisation's official published number to verify.",
+            ChannelType.VIDEO: "High risk. This video may contain AI-generated or manipulated content. Do NOT share or act on it. Verify through official sources.",
         }.get(channel, "High risk. Do not act; verify through official channels and report.")
     if level == RiskLevel.MEDIUM:
         return ("Suspicious — do not act yet. Independently verify through the official website or app "
@@ -62,9 +64,17 @@ def _recommended_action(level: RiskLevel, channel: ChannelType, verified: bool) 
     return "No strong threat signals detected. Stay cautious and verify sensitive actions independently."
 
 
-def _level_for(risk: float, is_official: bool, official_conf: float) -> tuple[RiskLevel, str]:
+def _level_for(risk: float, is_official: bool, official_conf: float, channel: ChannelType | None = None) -> tuple[RiskLevel, str]:
     if is_official and official_conf >= 0.7 and risk < 0.3:
         return RiskLevel.LOW, "low"
+    # Video deepfake: model probability thresholds (not LLM-driven)
+    if channel == ChannelType.VIDEO:
+        if risk >= 0.75:
+            return RiskLevel.HIGH, "high"
+        elif risk >= 0.40:
+            return RiskLevel.MEDIUM, "medium"
+        else:
+            return RiskLevel.LOW, "low"
     if risk >= 0.6:
         return RiskLevel.HIGH, "high"
     elif risk >= 0.3:
@@ -97,6 +107,7 @@ def _threat_label(primary, level: RiskLevel, channel: ChannelType, auth) -> str:
         ChannelType.URL: "Suspicious web page",
         ChannelType.SOCIAL: "Possible market manipulation",
         ChannelType.AUDIO: "Possible synthetic voice",
+        ChannelType.VIDEO: "Potential deepfake video",
     }.get(channel, "Suspicious communication")
     if level == RiskLevel.LOW:
         return f"Low risk ({channel.value})"
@@ -140,7 +151,7 @@ def analyze(req: AnalysisRequest) -> AnalysisResult:
         req.claimed_source = primary.fields["impersonated_entity"]
 
     risk = primary.probability
-    level, severity = _level_for(risk, auth.is_official_source, auth.official_confidence)
+    level, severity = _level_for(risk, auth.is_official_source, auth.official_confidence, req.channel_type)
     confidence = _confidence(primary, auth)
 
     evidence: list[Evidence] = list(primary.evidence)
