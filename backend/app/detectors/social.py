@@ -50,6 +50,7 @@ def run(req: AnalysisRequest, deep: bool) -> DetectorResult:
     forensic_summary = "No forensic data."
     screenshot_summary = "No screenshot."
 
+    # --- Render + forensics (only when there's a link) ---
     if target:
         rendered = render(target.raw)
         used_render = True
@@ -121,6 +122,7 @@ def run(req: AnalysisRequest, deep: bool) -> DetectorResult:
                             weight=0.0, severity="info"))
                     fields["screenshot_vision"] = {k: v for k, v in screenshot_analysis.items() if v}
 
+            # --- Claim verification (only when link exists) ---
             claims_raw = intent.get("claims_to_verify", [])
             if claims_raw and isinstance(claims_raw[0], str):
                 claims = [{"text": c, "type": "llm_claim", "verified": False, "sources": [], "contradicted": False} for c in claims_raw] if claims_raw else []
@@ -189,49 +191,65 @@ def run(req: AnalysisRequest, deep: bool) -> DetectorResult:
                 "looks_deceptive": screenshot_analysis.get("looks_deceptive"),
                 "notes": screenshot_analysis.get("notes"),
             } if screenshot_analysis else "No screenshot."
+        else:
+            rendered_data = "No rendered page."
+            forensic_data = "No forensic data."
+            screenshot_data = "No screenshot."
+    else:
+        rendered_data = "No link in message — Playwright analysis not run."
+        forensic_data = "No forensic data."
+        screenshot_data = "No screenshot."
 
-            intent_data = {
-                "classification": classific,
-                "confidence": intent.get("confidence", 0.0),
-                "explanation": intent.get("explanation"),
-            }
+    # --- Verdict LLM (ALWAYS runs, with or without a link) ---
+    intent_data = {
+        "classification": classific,
+        "confidence": intent.get("confidence", 0.0),
+        "explanation": intent.get("explanation"),
+    }
 
-            user = (
-                f"## POST TEXT\n{req.raw_input[:2000]}\n\n"
-                f"## INTENT ANALYSIS\n{json.dumps(intent_data, indent=2, default=str)}\n\n"
-                f"## RENDERED PAGE\n{json.dumps(rendered_data, indent=2, default=str)}\n\n"
-                f"## FORENSIC DATA\n{json.dumps(forensic_data, indent=2, default=str)}\n\n"
-                f"## SCREENSHOT\n{json.dumps(screenshot_data, indent=2, default=str)}\n"
-            )
+    user = (
+        f"SCORING KEY: classification=market_manipulation → 0.70-0.95 | classification=spam_or_rumor → 0.40-0.65 | educational_content → 0.01-0.15. DEAD/ERROR PAGE does not reduce score — use intent as primary signal.\n\n"
+        f"## POST TEXT\n{req.raw_input[:2000]}\n\n"
+        f"## INTENT ANALYSIS\n{json.dumps(intent_data, indent=2, default=str)}\n\n"
+        f"## RENDERED PAGE\n{json.dumps(rendered_data, indent=2, default=str)}\n\n"
+        f"## FORENSIC DATA\n{json.dumps(forensic_data, indent=2, default=str)}\n\n"
+        f"## SCREENSHOT\n{json.dumps(screenshot_data, indent=2, default=str)}\n"
+    )
 
-            def _neutral():
-                if classific == "educational_content":
-                    return {"manipulation_probability": 0.10, "explanation": "Educational content.",
-                            "false_authority": False, "suspicious_cta": None, "fraud_destination": None}
-                if classific == "market_manipulation":
-                    return {"manipulation_probability": 0.70, "explanation": "Market manipulation pattern.",
-                            "false_authority": True, "suspicious_cta": "investment", "fraud_destination": target.registered_domain if target else None}
-                if classific == "spam_or_rumor":
-                    return {"manipulation_probability": 0.50, "explanation": "Unverified claims.",
-                            "false_authority": False, "suspicious_cta": None, "fraud_destination": None}
-                return {"manipulation_probability": 0.30, "explanation": "Uncertain.",
-                        "false_authority": False, "suspicious_cta": None, "fraud_destination": None}
+    def _neutral():
+        if classific == "educational_content":
+            return {"manipulation_probability": 0.10, "explanation": "Educational content.",
+                    "false_authority": False, "suspicious_cta": None, "fraud_destination": None}
+        if classific == "market_manipulation":
+            return {"manipulation_probability": 0.70, "explanation": "Market manipulation pattern.",
+                    "false_authority": True, "suspicious_cta": "investment", "fraud_destination": target.registered_domain if target else None}
+        if classific == "spam_or_rumor":
+            return {"manipulation_probability": 0.50, "explanation": "Unverified claims.",
+                    "false_authority": False, "suspicious_cta": None, "fraud_destination": None}
+        return {"manipulation_probability": 0.30, "explanation": "Uncertain.",
+                "false_authority": False, "suspicious_cta": None, "fraud_destination": None}
 
-            data, used_llm = reason_json(load_prompt("social_verdict.txt"), user, _neutral)
-            try:
-                prob = float(data.get("manipulation_probability", 0.15))
-            except Exception:
-                prob = 0.15
-            prob = max(0.0, min(prob, 1.0))
+    data, used_llm = reason_json(load_prompt("social_verdict.txt"), user, _neutral)
+    try:
+        prob = float(data.get("manipulation_probability", 0.15))
+    except Exception:
+        prob = 0.15
+    prob = max(0.0, min(prob, 1.0))
 
-            fields["false_authority"] = bool(data.get("false_authority", False))
-            fields["suspicious_cta"] = data.get("suspicious_cta")
-            fields["fraud_destination"] = data.get("fraud_destination")
-            explanation = data.get("explanation", explanation)
-            for k in data.get("key_evidence", [])[:5]:
-                evidence.append(Evidence(
-                    source="verdict", label="Key evidence",
-                    detail=str(k)[:200], weight=0.1, severity="info"))
+    # Safety floor: intent classifier is authoritative for market_manipulation.
+    if classific == "market_manipulation":
+        prob = max(prob, 0.70)
+    elif classific == "spam_or_rumor":
+        prob = max(prob, 0.40)
+
+    fields["false_authority"] = bool(data.get("false_authority", False))
+    fields["suspicious_cta"] = data.get("suspicious_cta")
+    fields["fraud_destination"] = data.get("fraud_destination")
+    explanation = data.get("explanation", explanation)
+    for k in data.get("key_evidence", [])[:5]:
+        evidence.append(Evidence(
+            source="verdict", label="Key evidence",
+            detail=str(k)[:200], weight=0.1, severity="info"))
 
     label = "Likely manipulation" if prob >= 0.6 else ("Suspicious" if prob >= 0.35 else "Low manipulation risk")
     return DetectorResult(
